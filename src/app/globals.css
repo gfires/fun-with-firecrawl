@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Global chrome for the "Bloomberg terminal meets Stripe" look.
+ * Color tokens live in tailwind.config.ts; this file wires fonts, the base canvas,
+ * a subtle scanline/grid backdrop, and a few reusable component classes.
+ */
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink text-fg font-sans antialiased;
+  /* Faint terminal grid — sells the diagnostic-instrument feel without being loud. */
+  background-image:
+    linear-gradient(rgba(45, 212, 191, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 212, 191, 0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* Tabular figures everywhere numbers appear, so scores don't jitter as they update. */
+.nums {
+  @apply font-mono tabular-nums;
+}
+
+@layer components {
+  /* A raised panel — the base surface for cards and sections. */
+  .panel {
+    @apply rounded-lg border border-line bg-panel;
+  }
+
+  /* Small uppercase label used for section eyebrows and stat captions. */
+  .eyebrow {
+    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-mute;
+  }
+
+  /* A citation chip: [N] domain, clickable. */
+  .source-chip {
+    @apply inline-flex items-center gap-1 rounded border border-line bg-panel2 px-1.5 py-0.5
+           font-mono text-[10px] text-mute transition-colors hover:border-accent hover:text-accent;
+  }
+}
+
+/* Thin custom scrollbar for the activity feed / long lists. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded bg-line;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
