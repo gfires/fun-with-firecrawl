@@ -11,7 +11,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import type { ScanEvent, ScanPhase } from "./events";
+import type { ScanEvent, ScanPhase, TokenUsage } from "./events";
 import { phaseFor } from "./events";
 import type { ScanReport } from "./schema";
 import { fmtMs } from "./format";
@@ -67,6 +67,14 @@ export interface Timing {
   totalMs: number | null;
 }
 
+/** Accumulated API usage across the scan — tokens by model + Firecrawl call count. */
+export interface UsageSummary {
+  /** Token counts grouped by model (e.g. { "gpt-4o-mini": { prompt: 1200, completion: 400 }, ... }). */
+  tokensByModel: Record<string, { prompt: number; completion: number }>;
+  /** Total Firecrawl API calls (searches + scrapes). */
+  firecrawlCalls: number;
+}
+
 /** The full reduced state the UI renders from. */
 export interface ScanState {
   phase: ScanPhase | "idle";
@@ -83,6 +91,8 @@ export interface ScanState {
   prompt: PromptTrace | null;
   /** Phase + total latencies, for the "path taken" transparency. */
   timing: Timing;
+  /** Accumulated API usage (tokens + Firecrawl calls). */
+  usage: UsageSummary;
   report: ScanReport | null;
   error: string | null;
   running: boolean;
@@ -98,10 +108,19 @@ const initialState: ScanState = {
   trace: [],
   prompt: null,
   timing: { adaptMs: null, searchMs: null, triageMs: null, scrapeMs: null, analyzeMs: null, totalMs: null },
+  usage: { tokensByModel: {}, firecrawlCalls: 0 },
   report: null,
   error: null,
   running: false,
 };
+
+function addUsage(prev: UsageSummary, u?: TokenUsage): UsageSummary {
+  if (!u) return prev;
+  const byModel = { ...prev.tokensByModel };
+  const existing = byModel[u.model] ?? { prompt: 0, completion: 0 };
+  byModel[u.model] = { prompt: existing.prompt + u.promptTokens, completion: existing.completion + u.completionTokens };
+  return { ...prev, tokensByModel: byModel, firecrawlCalls: prev.firecrawlCalls };
+}
 
 /** Pure reducer: fold one ScanEvent into the state. Exported for testing. */
 export function reduce(state: ScanState, ev: ScanEvent): ScanState {
@@ -120,6 +139,7 @@ export function reduce(state: ScanState, ev: ScanEvent): ScanState {
         intents: ev.intents.map((i) => ({ label: i.label, query: i.query, status: "pending", count: 0, ms: 0 })),
         intentsAdapted: ev.adapted,
         timing: { ...state.timing, adaptMs: ev.ms },
+        usage: addUsage(state.usage, ev.usage),
         trace: [
           ...state.trace,
           ev.adapted
@@ -162,6 +182,7 @@ export function reduce(state: ScanState, ev: ScanEvent): ScanState {
         ...state,
         phase,
         timing: { ...state.timing, triageMs: ev.ms },
+        usage: addUsage(state.usage, ev.usage),
         trace: [
           ...state.trace,
           `Triaged ${ev.candidates} candidates → selected ${ev.selected} to scrape (${fmtMs(ev.ms)})`
@@ -221,15 +242,18 @@ export function reduce(state: ScanState, ev: ScanEvent): ScanState {
         trace: [...state.trace, `Scraped corpus in ${fmtMs(ev.scrapeMs)}. Running inference on ${ev.model}…`],
       };
 
-    case "report":
+    case "report": {
+      const updated = addUsage(state.usage, ev.usage);
       return {
         ...state,
         phase: "done",
         running: false,
         report: ev.report,
         timing: { ...state.timing, analyzeMs: ev.analyzeMs, totalMs: ev.totalMs },
+        usage: { ...updated, firecrawlCalls: ev.firecrawlCalls },
         trace: [...state.trace, `Inference done in ${fmtMs(ev.analyzeMs)}. Scan complete in ${fmtMs(ev.totalMs)}.`],
       };
+    }
 
     case "error":
       return { ...state, phase: "done", running: false, error: ev.message };

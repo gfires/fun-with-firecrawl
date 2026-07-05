@@ -282,19 +282,20 @@ export async function explore(
   onEvent: (e: ScanEvent) => void,
   now: Clock = () => Date.now(),
   nowIso: string = new Date().toISOString(),
-): Promise<{ sources: Source[]; scraped: ScrapedSource[]; searchMs: number; scrapeMs: number }> {
+): Promise<{ sources: Source[]; scraped: ScrapedSource[]; searchMs: number; scrapeMs: number; firecrawlCalls: number }> {
   const app = makeFirecrawl();
   const { maxScrape, quotaFloor } = config();
 
   // --- (a) Adapt intents ---
   const adaptStart = now();
   onEvent({ type: "adapt:begin", model: triageModel() });
-  const { intents, adapted } = await makeIntents(industry);
+  const { intents, adapted, usage: adaptUsage } = await makeIntents(industry);
   onEvent({
     type: "intents",
     intents: intents.map((i) => ({ label: i.label, query: i.query })),
     adapted,
     ms: now() - adaptStart,
+    usage: adaptUsage,
   });
 
   // --- Search + dedupe ---
@@ -315,7 +316,7 @@ export async function explore(
   // --- (c) Triage: score candidates before scraping ---
   const triageStart = now();
   onEvent({ type: "triage:begin", model: triageModel(), candidates: candidates.length, blocked: blocked.length });
-  const scores = await scoreCandidates(industry, candidates);
+  const { scores, usage: triageUsage } = await scoreCandidates(industry, candidates);
   const sources = selectSources(candidates, scores, maxScrape, quotaFloor);
   onEvent({
     type: "triage:done",
@@ -324,12 +325,16 @@ export async function explore(
     blocked: blocked.length,
     adapted,
     ms: now() - triageStart,
+    usage: triageUsage,
   });
 
   const ranked: RankedSource[] = sources.map((source) => ({
     source,
     blocked: false,
   }));
+
+  // Firecrawl API calls: one search per intent + one scrape per source (minus skips).
+  const firecrawlCalls = intents.length + sources.length;
 
   onEvent({
     type: "sources",
@@ -342,5 +347,5 @@ export async function explore(
   const scraped = await scrapeSources(app, ranked, onEvent, now, nowIso);
   const scrapeMs = now() - scrapeStart;
 
-  return { sources, scraped, searchMs, scrapeMs };
+  return { sources, scraped, searchMs, scrapeMs, firecrawlCalls };
 }

@@ -21,6 +21,7 @@ import { makeOpenAI, REPORT_SECTIONS } from "./analyze";
 import { buildIntents, normalizeIndustry, type Intent } from "./intents";
 import { clamp, domainOf } from "./format";
 import type { Source } from "./schema";
+import type { TokenUsage } from "./events";
 
 /** The triage/adaptation model — cheap and fast. Overridable for testing the fallback path. */
 export function triageModel(): string {
@@ -59,12 +60,13 @@ const IntentsSchema = z.object({
 export async function makeIntents(
   rawIndustry: string,
   count = Number(process.env.SCAN_INTENTS ?? 10),
-): Promise<{ intents: Intent[]; adapted: boolean }> {
+): Promise<{ intents: Intent[]; adapted: boolean; usage?: TokenUsage }> {
   const industry = normalizeIndustry(rawIndustry);
   const fallback = { intents: buildIntents(industry).slice(0, count), adapted: false };
 
   try {
     const client = makeOpenAI();
+    const model = triageModel();
     const prompt = `You design web-search queries for an industry-diagnostics report on "${industry}".
 
 The report will contain these sections:
@@ -80,14 +82,18 @@ jargon, named systems, regulations, roles). Each intent has:
 Return ONLY JSON: { "intents": [ { "label": "...", "query": "..." }, ... ] }`;
 
     const res = await client.chat.completions.create({
-      model: triageModel(),
+      model,
       response_format: { type: "json_object" },
       temperature: 0.5,
       messages: [{ role: "user", content: prompt }],
     });
 
+    const usage: TokenUsage | undefined = res.usage
+      ? { model, promptTokens: res.usage.prompt_tokens, completionTokens: res.usage.completion_tokens }
+      : undefined;
+
     const parsed = IntentsSchema.safeParse(JSON.parse(res.choices[0]?.message?.content ?? "{}"));
-    if (!parsed.success || parsed.data.intents.length === 0) return fallback;
+    if (!parsed.success || parsed.data.intents.length === 0) return { ...fallback, usage };
 
     // Normalize to exactly `count`: truncate if over, pad from static templates if under.
     const llm = parsed.data.intents;
@@ -98,7 +104,7 @@ Return ONLY JSON: { "intents": [ { "label": "...", "query": "..." }, ... ] }`;
         if (!intents.some((i) => i.label.toLowerCase() === s.label.toLowerCase())) intents.push(s);
       }
     }
-    return { intents, adapted: true };
+    return { intents, adapted: true, usage };
   } catch {
     return fallback;
   }
@@ -126,13 +132,14 @@ export const UNSCORED: TriageScore = { score: 5, reason: "unscored (triage unava
 export async function scoreCandidates(
   rawIndustry: string,
   candidates: Candidate[],
-): Promise<Map<string, TriageScore>> {
+): Promise<{ scores: Map<string, TriageScore>; usage?: TokenUsage }> {
   const industry = normalizeIndustry(rawIndustry);
   const out = new Map<string, TriageScore>();
-  if (candidates.length === 0) return out;
+  if (candidates.length === 0) return { scores: out };
 
   try {
     const client = makeOpenAI();
+    const model = triageModel();
     const list = candidates
       .map((c, i) => {
         const tags = c.intents.length > 1 ? `intents: ${c.intents.join(", ")} (${c.intents.length}×)` : `intent: ${c.intents[0] ?? "?"}`;
@@ -156,24 +163,27 @@ RESULTS:
 ${list}`;
 
     const res = await client.chat.completions.create({
-      model: triageModel(),
+      model,
       response_format: { type: "json_object" },
       temperature: 0.2,
       messages: [{ role: "user", content: prompt }],
     });
 
+    const usage: TokenUsage | undefined = res.usage
+      ? { model, promptTokens: res.usage.prompt_tokens, completionTokens: res.usage.completion_tokens }
+      : undefined;
+
     const parsed = ScoresSchema.safeParse(JSON.parse(res.choices[0]?.message?.content ?? "{}"));
-    if (!parsed.success) return fillUnscored(candidates, out);
+    if (!parsed.success) return { scores: fillUnscored(candidates, out), usage };
 
     for (const s of parsed.data.scores) {
       const cand = candidates[s.id];
       if (cand) out.set(cand.url, { score: clamp(s.score, 0, 10), reason: s.reason || "" });
     }
-    // Any candidate the model skipped gets the neutral default.
     for (const c of candidates) if (!out.has(c.url)) out.set(c.url, UNSCORED);
-    return out;
+    return { scores: out, usage };
   } catch {
-    return fillUnscored(candidates, out);
+    return { scores: fillUnscored(candidates, out) };
   }
 }
 

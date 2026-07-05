@@ -11,6 +11,13 @@
  */
 import type { ScanReport } from "./schema";
 
+/** Token usage from a single OpenAI call. */
+export interface TokenUsage {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+}
+
 /** Coarse pipeline stages, used to drive the progress header. */
 export type ScanPhase = "adapt" | "intents" | "search" | "triage" | "scrape" | "analyze" | "done";
 
@@ -24,7 +31,7 @@ export type ScanEvent =
    * when we fell back to the static templates. Each carries the human label and the FULL query
    * string, so the UI shows exactly what's being searched. `ms` is the adapt-step latency.
    */
-  | { type: "intents"; intents: { label: string; query: string }[]; adapted: boolean; ms: number }
+  | { type: "intents"; intents: { label: string; query: string }[]; adapted: boolean; ms: number; usage?: TokenUsage }
   /** A single intent's search has begun. */
   | { type: "search:begin"; intent: string }
   /** A single intent's search returned N results. `ms` is the search latency for that intent. */
@@ -32,7 +39,7 @@ export type ScanEvent =
   /** The pre-scrape triage (c) LLM step has begun, scoring `candidates` deduped hits. `blocked` = pre-filtered known blockers. */
   | { type: "triage:begin"; model: string; candidates: number; blocked: number }
   /** Triage finished: scored `candidates` hits, selected `selected` to scrape. `blocked` = pre-filtered. `ms` = latency. */
-  | { type: "triage:done"; candidates: number; selected: number; blocked: number; adapted: boolean; ms: number }
+  | { type: "triage:done"; candidates: number; selected: number; blocked: number; adapted: boolean; ms: number; usage?: TokenUsage }
   /**
    * The triaged, selected set of sources chosen for scraping. Sent after triage so the UI can
    * render the source list (with relevance scores) before scraping ticks through it. Each source
@@ -78,7 +85,7 @@ export type ScanEvent =
    */
   | { type: "analyze:begin"; model: string; systemPrompt: string; userPrompt: string; scrapeMs: number }
   /** Terminal success: the complete report. `totalMs`/`analyzeMs` document end-to-end timing. */
-  | { type: "report"; report: ScanReport; analyzeMs: number; totalMs: number }
+  | { type: "report"; report: ScanReport; analyzeMs: number; totalMs: number; usage?: TokenUsage; firecrawlCalls: number }
   /** Terminal failure with a human-readable message. */
   | { type: "error"; message: string };
 

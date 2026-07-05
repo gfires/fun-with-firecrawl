@@ -49,7 +49,7 @@ export async function POST(req: Request) {
         // Exploration: adapt intents → search → dedupe → triage → select → scrape. `explore`
         // owns intent generation now and emits adapt/intents/search/triage/sources/scrape events
         // (with timing), returning the phase durations for the summary.
-        const { sources, scraped, scrapeMs } = await explore(industry, send);
+        const { sources, scraped, scrapeMs, firecrawlCalls } = await explore(industry, send);
 
         // 4) Analyze. Build the prompt here so we can surface the EXACT prompt to the UI before
         //    the call. generatedAt is stamped here (server time) — one-shot, nothing persisted.
@@ -61,11 +61,11 @@ export async function POST(req: Request) {
           scrapeMs,
         });
         const analyzeStart = Date.now();
-        const llm = await callLLM(industry, scraped);
+        const { report: llm, usage: analyzeUsage } = await callLLM(industry, scraped);
         const report = assembleReport(industry, llm, sources, new Date().toISOString());
         const analyzeMs = Date.now() - analyzeStart;
 
-        send({ type: "report", report, analyzeMs, totalMs: Date.now() - scanStart });
+        send({ type: "report", report, analyzeMs, totalMs: Date.now() - scanStart, usage: analyzeUsage, firecrawlCalls });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unexpected error during scan.";
         send({ type: "error", message });

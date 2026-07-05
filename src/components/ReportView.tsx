@@ -3,7 +3,7 @@
  * spec's order), playful stats, and a full source appendix. Every claim carries citations.
  */
 import type { ScanReport } from "@/lib/schema";
-import type { ScanState } from "@/lib/useScanStream";
+import type { ScanState, UsageSummary } from "@/lib/useScanStream";
 import { SCORE_DEFINITIONS } from "@/lib/analyze";
 import { OpportunityMeter } from "./OpportunityMeter";
 import { Gauge } from "./Gauge";
@@ -149,6 +149,7 @@ export function ReportView({
       <details className="panel p-4 text-sm text-mute">
         <summary className="cursor-pointer font-mono text-xs uppercase tracking-widest text-fg/70">
           Method &amp; assumptions
+          <UsagePill usage={scan.usage} />
         </summary>
         <p className="mt-3 leading-relaxed">
           Opportunity MRI generated {report.sources.length ? "a set of" : "no"} search intents,
@@ -166,6 +167,7 @@ export function ReportView({
             </li>
           ))}
         </ul>
+        <UsageBreakdown usage={scan.usage} />
       </details>
 
       {/* The exact prompt that produced this report — collapsed, for full transparency. */}
@@ -194,6 +196,67 @@ export function ReportView({
         >
           Scan another industry →
         </button>
+      </div>
+    </div>
+  );
+}
+
+const MODEL_COSTS: Record<string, { prompt: number; completion: number }> = {
+  "gpt-4o": { prompt: 2.5, completion: 10 },
+  "gpt-4o-mini": { prompt: 0.15, completion: 0.6 },
+};
+
+function estimateCost(usage: UsageSummary): number {
+  let cents = 0;
+  for (const [model, tokens] of Object.entries(usage.tokensByModel)) {
+    const rates = MODEL_COSTS[model] ?? MODEL_COSTS["gpt-4o"];
+    cents += (tokens.prompt / 1_000_000) * rates.prompt * 100;
+    cents += (tokens.completion / 1_000_000) * rates.completion * 100;
+  }
+  return cents;
+}
+
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function UsagePill({ usage }: { usage: UsageSummary }) {
+  const total = Object.values(usage.tokensByModel).reduce((s, t) => s + t.prompt + t.completion, 0);
+  if (total === 0) return null;
+  const cents = estimateCost(usage);
+  return (
+    <span className="ml-2 inline-flex items-center gap-1.5 normal-case tracking-normal text-mute/70">
+      {fmtTokens(total)} tokens · ~${cents < 1 ? cents.toFixed(2) : cents.toFixed(1)}¢
+      {usage.firecrawlCalls > 0 && <> · {usage.firecrawlCalls} API calls</>}
+    </span>
+  );
+}
+
+function UsageBreakdown({ usage }: { usage: UsageSummary }) {
+  const models = Object.entries(usage.tokensByModel);
+  if (models.length === 0) return null;
+  return (
+    <div className="mt-3 rounded border border-line bg-ink p-3">
+      <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-mute/70">API usage</div>
+      <div className="space-y-1 font-mono text-[12px]">
+        {models.map(([model, tokens]) => (
+          <div key={model} className="flex items-center justify-between gap-4">
+            <span className="text-fg/70">{model}</span>
+            <span className="nums text-mute">
+              {fmtTokens(tokens.prompt)} in · {fmtTokens(tokens.completion)} out
+            </span>
+          </div>
+        ))}
+        {usage.firecrawlCalls > 0 && (
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-fg/70">Firecrawl</span>
+            <span className="nums text-mute">{usage.firecrawlCalls} calls</span>
+          </div>
+        )}
+        <div className="mt-1 border-t border-line pt-1 flex items-center justify-between gap-4">
+          <span className="text-fg/70">Estimated cost</span>
+          <span className="nums text-mute">~${estimateCost(usage) < 1 ? estimateCost(usage).toFixed(2) : estimateCost(usage).toFixed(1)}¢</span>
+        </div>
       </div>
     </div>
   );

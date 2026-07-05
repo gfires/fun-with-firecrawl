@@ -12,6 +12,7 @@
 import OpenAI from "openai";
 import { LlmReportSchema, type LlmReport, type ScanReport, type Source } from "./schema";
 import type { ScrapedSource } from "./firecrawl";
+import type { TokenUsage } from "./events";
 import { opportunityScore, derivePlayfulStats } from "./scoring";
 import { titleCase } from "./format";
 
@@ -147,10 +148,13 @@ function tryParse(raw: string): LlmReport | null {
  * Call the LLM and return a validated LlmReport. One repair retry on invalid output; throws
  * only if both attempts fail (the route catches and turns this into an `error` event).
  */
-export async function callLLM(industry: string, sources: ScrapedSource[]): Promise<LlmReport> {
+export async function callLLM(industry: string, sources: ScrapedSource[]): Promise<{ report: LlmReport; usage?: TokenUsage }> {
   const client = makeOpenAI();
   const { model } = config();
   const prompt = buildPrompt(industry, sources);
+
+  let promptTokens = 0;
+  let completionTokens = 0;
 
   const complete = (extra?: string) =>
     client.chat.completions.create({
@@ -164,15 +168,23 @@ export async function callLLM(industry: string, sources: ScrapedSource[]): Promi
     });
 
   const first = await complete();
+  if (first.usage) {
+    promptTokens += first.usage.prompt_tokens;
+    completionTokens += first.usage.completion_tokens;
+  }
   const firstReport = tryParse(first.choices[0]?.message?.content ?? "");
-  if (firstReport) return firstReport;
+  if (firstReport) return { report: firstReport, usage: { model, promptTokens, completionTokens } };
 
   // Repair pass: same corpus, explicit nudge to fix the JSON shape.
   const retry = await complete(
     "Your previous response was not valid JSON matching the schema. Return ONLY the JSON object, all fields present, scores within 0-10.",
   );
+  if (retry.usage) {
+    promptTokens += retry.usage.prompt_tokens;
+    completionTokens += retry.usage.completion_tokens;
+  }
   const retryReport = tryParse(retry.choices[0]?.message?.content ?? "");
-  if (retryReport) return retryReport;
+  if (retryReport) return { report: retryReport, usage: { model, promptTokens, completionTokens } };
 
   throw new Error("The analysis model did not return a valid report. Try running the scan again.");
 }
