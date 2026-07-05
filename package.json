@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mendable/firecrawl-js": "^1.19.0",
+    "jspdf": "^4.2.1",
     "next": "^15.4.7",
     "openai": "^4.77.0",
     "react": "19.0.0",

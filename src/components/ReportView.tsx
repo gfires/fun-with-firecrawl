@@ -10,6 +10,7 @@ import { Gauge } from "./Gauge";
 import { ReportSection, EvidenceList } from "./ReportSection";
 import { Citations } from "./SourceChip";
 import { ScanProgress } from "./ScanProgress";
+import { exportReportPdf } from "@/lib/exportPdf";
 
 export function ReportView({
   report,
@@ -160,7 +161,13 @@ export function ReportView({
         </div>
       </details>
 
-      <div className="flex justify-center pb-8 pt-2">
+      <div className="flex justify-center gap-3 pb-8 pt-2">
+        <button
+          onClick={() => exportReportPdf(report)}
+          className="rounded-lg border border-accent px-6 py-2.5 font-mono text-sm font-semibold text-accent transition hover:bg-accent hover:text-ink"
+        >
+          Export PDF
+        </button>
         <button
           onClick={onReset}
           className="rounded-lg bg-accent px-6 py-2.5 font-mono text-sm font-semibold text-ink transition hover:brightness-110"
