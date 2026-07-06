@@ -121,23 +121,80 @@ Produce a JSON object with EXACTLY these fields:
 SECTION INSTRUCTIONS:
 
 - "bottlenecks": Structural root causes that create opportunity — regulatory, workflow, technical, \
-or labor bottlenecks. NOT surface-level friction or complaints (those are symptoms). 3-5 items.
+or labor bottlenecks. NOT surface-level friction or complaints (those are symptoms). 3-5 items. \
+CRITICAL: each bottleneck must describe the SPECIFIC WORKFLOW or process that breaks down. \
+BAD: "Regulatory compliance is a significant bottleneck." \
+GOOD: "Brokers must manually verify borrower income by cross-referencing W-2s, 1099s, and bank \
+statements against Fannie Mae's DU/LP automated underwriting output — a process that takes 2-4 \
+hours per file and still produces a 15% error rate according to [3]. No existing tool connects \
+the document OCR step to the AUS submission, so brokers re-key data between systems." \
+Name the specific documents, systems, job titles, regulations, or process steps involved. If the \
+source mentions a pain point generically, dig into the HOW — what exactly do people do today, \
+step by step, and where does it break?
+
+- "underservedNiches": Segments or workflows nobody is solving well. 3-5 items. \
+CRITICAL: each niche must name a SPECIFIC population or workflow gap and explain WHY it's \
+underserved with concrete details. \
+BAD: "First-time homebuyers need more personalized guidance." \
+GOOD: "Self-employed borrowers with 1099 income are rejected by automated underwriting at 3x \
+the rate of W-2 earners [5] because DU/LP models weight income stability heavily — but manual \
+underwriters who specialize in non-QM products report approval rates above 70% [8]. No existing \
+platform routes these borrowers to the right underwriter or pre-qualifies them with alternative \
+documentation (12-month bank statement programs, asset depletion calculations)." \
+Name the population size if available, what they need, what exists today, and what's missing.
 
 - "opportunityThesis": A SINGLE DENSE PARAGRAPH (not a list) that is essentially a one-paragraph \
 pitch a founder can immediately run with. It must: (1) explicitly tie the bottlenecks above to \
-what's needed, (2) name specific potential solutions, (3) explain why NOW is the moment, and \
-(4) cite sources throughout with [id]s. This should read like a VC memo paragraph — packed with \
-evidence, specific, and actionable. Think: "Here's exactly what to build and why it will work."
+a SPECIFIC product — name the features, the data flows, the integrations, (2) explain the wedge: \
+which single workflow do you automate first and for whom, (3) explain why NOW is the moment \
+(regulatory change, technology inflection, market shift — be specific), and (4) cite sources \
+throughout with [id]s. \
+BAD: "AI-driven solutions can address regulatory compliance and administrative burdens." \
+GOOD: "A system that ingests borrower documents (W-2s, 1099s, bank statements) via OCR, \
+auto-populates the 1003 Uniform Residential Loan Application, and submits directly to DU/LP \
+would eliminate the 2-4 hour manual verification bottleneck that [3] identifies. The wedge is \
+the 1099/self-employed segment..." \
+Think: someone should be able to read this paragraph and start building a PRD.
+
+- "adjacentMarkets": Neighboring industries or verticals with crossover potential. 3-5 items. \
+CRITICAL: each adjacent market must explain the SPECIFIC MECHANISM of crossover — what shared \
+workflow, regulation, data format, or customer relationship creates the bridge. \
+BAD: "Insurance is an adjacent market with synergies." \
+GOOD: "Title insurance underwriters already consume the same MISMO-format XML data packages that \
+mortgage originators produce [4], and 'title agents spend 6+ hours per file chasing payoff \
+statements from servicers' [11] — a document-ingestion system built for mortgage verification \
+could extend to title search automation with minimal re-engineering because the underlying \
+document types (deeds, liens, UCC filings) flow through the same county clerk APIs." \
+Name the specific data formats, vendor ecosystems, regulatory overlaps, or shared customer \
+segments that make the crossover realistic, not hypothetical.
 
 - "nextSteps": Extremely clear, unambiguous, actionable instructions for what a founder should do \
-RIGHT NOW. Not vague advice — specific actions: assumptions to test, discovery interviews to \
-conduct (with whom), what MVP to build, what data to gather, what to validate first. 4-6 items.
+RIGHT NOW. Not vague advice — specific actions with enough detail that someone could execute \
+them this week. 4-6 items. \
+BAD: "Conduct customer discovery interviews with industry professionals." \
+GOOD: "Post on r/mortgagebrokers and the 'Loan Officer Freedom' Facebook group (12k members) \
+offering a $50 Amazon card for a 30-minute Zoom — ask them to screen-share their actual income \
+verification workflow in Encompass/Byte and note every manual re-keying step. Target 8-10 \
+interviews; you need to see the workflow, not just hear about it." \
+Each step should name specific communities, tools, conferences, datasets, regulatory filings, \
+or organizations from the sources. Reference what the sources revealed — the next steps should \
+be things a founder would ONLY know to do after reading this report.
 
 CRITICAL — every "text", "note", and the "opportunityThesis" string MUST include direct quotes \
 pulled verbatim from the sources in quotation marks, with the source [id] immediately after. Build \
 each item as a specific thesis supported by concrete details (names, numbers, exact phrases from \
 real people/companies), NOT a generic summary. The reader should encounter real voices and hard \
 data, not paraphrased abstractions.
+
+SPECIFICITY TEST — apply this to EVERY item in bottlenecks, underservedNiches, adjacentMarkets, \
+nextSteps, and the opportunityThesis: "Could someone who did zero research have written this \
+from general knowledge alone?" If yes, it FAILS. Rewrite it with specific document names, system \
+names, process steps, job titles, regulations, dollar amounts, error rates, community names, \
+vendor names, or data formats that you found IN the sources. The entire value of this report is \
+that it surfaces operational details a founder wouldn't know without deep research. Generic \
+observations anyone could guess — "workflow automation," "regulatory compliance is complex," \
+"the market is growing" — are worthless. Every sentence should make the reader think "I didn't \
+know that."
 
 Minimize redundancy between sections. Bottlenecks describe the problems. Underserved niches \
 describe who's underserved. The opportunity thesis synthesizes both into what to build and why. \
