@@ -15,7 +15,7 @@
  * the ~30–60s scan can complete.
  */
 import { normalizeIndustry } from "@/lib/intents";
-import { explore } from "@/lib/firecrawl";
+import { explore } from "@/lib/evidence/firecrawl";
 import { callLLM, assembleReport, buildPrompt, SYSTEM_PROMPT, currentModel } from "@/lib/analyze";
 import { recordScan } from "@/lib/leaderboard";
 import type { ScanEvent } from "@/lib/events";

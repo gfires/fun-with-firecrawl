@@ -19,15 +19,16 @@
  * module stays deterministic under test.
  */
 import FirecrawlApp from "@mendable/firecrawl-js";
-import type { ScanEvent } from "./events";
-import type { Source } from "./schema";
-import type { Intent } from "./intents";
-import { domainOf, truncate } from "./format";
-import { loadBlocklist, blocklistKey, isHardBlock, recordBlock } from "./blocklist";
-import { getCache, setCache } from "./scrape-cache";
-import { getSearchCache, setSearchCache } from "./search-cache";
-import { MAX_CHARS_PER_PAGE, SCRAPE_TIMEOUT_MS, SCRAPE_CONCURRENCY, RESULTS_PER_INTENT, MAX_SCRAPE, QUOTA_FLOOR } from "./params";
-import { makeIntents, scoreCandidates, selectSources, triageModel, type Candidate } from "./triage";
+import type { ScanEvent } from "../events";
+import type { Source } from "../schema";
+import type { Intent } from "../intents";
+import { domainOf, truncate } from "../format";
+import { loadBlocklist, blocklistKey, isHardBlock, recordBlock } from "../blocklist";
+import { getCache, setCache } from "../scrape-cache";
+import { getSearchCache, setSearchCache } from "../search-cache";
+import { MAX_CHARS_PER_PAGE, SCRAPE_TIMEOUT_MS, SCRAPE_CONCURRENCY, RESULTS_PER_INTENT, MAX_SCRAPE, QUOTA_FLOOR } from "../params";
+import { makeIntents, scoreCandidates, selectSources, triageModel, type Candidate } from "../triage";
+import { type Evidence, contentHash } from "./store";
 
 
 /** A search hit before it's promoted to a citable Source. */
@@ -351,4 +352,87 @@ export async function explore(
   const firecrawlCredits = searchResult.apiCalls * 2 + scrapeApiCalls * 1;
 
   return { sources, scraped, searchMs, scrapeMs, firecrawlCalls, firecrawlCredits };
+}
+
+/**
+ * Search for evidence across multiple queries, scrape results, and return typed Evidence[].
+ * Wraps the existing Firecrawl search+scrape pipeline without LLM triage.
+ * Each result is tagged with sourceQuery (the query that surfaced it) and loopIteration.
+ */
+export async function search(
+  queries: string[],
+  k: number,
+  loopIteration: number,
+): Promise<Evidence[]> {
+  const app = makeFirecrawl();
+  const now: Clock = () => Date.now();
+  const nowIso = new Date().toISOString();
+  const noop = () => {};
+
+  // Track per-URL snippet and the query that surfaced each URL first.
+  const metaByUrl = new Map<string, { snippet: string; sourceQuery: string }>();
+
+  const perQuery = await Promise.all(
+    queries.map(async (query) => {
+      try {
+        const cached = await getSearchCache(query);
+        const raw = cached
+          ? cached
+          : await (async () => {
+              const res = await app.search(query, { limit: k });
+              const hits = (res.data ?? [])
+                .filter((d) => d.url)
+                .map((d) => ({
+                  url: d.url as string,
+                  title: d.metadata?.title || d.title || domainOf(d.url as string),
+                  snippet: d.description || d.metadata?.description || "",
+                }));
+              void setSearchCache(query, hits);
+              return hits;
+            })();
+        return raw.map((h) => ({ ...h, intent: query }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  const hits: SearchHit[] = perQuery.flat();
+  for (const h of hits) {
+    if (!metaByUrl.has(h.url)) {
+      metaByUrl.set(h.url, { snippet: h.snippet, sourceQuery: h.intent });
+    }
+  }
+
+  const candidates = dedupeCandidates(hits);
+  const blockset = await loadBlocklist();
+
+  const ranked: RankedSource[] = candidates.map((c, i) => ({
+    source: {
+      id: i,
+      url: c.url,
+      domain: domainOf(c.url),
+      title: c.title,
+      intent: c.intents[0] ?? "",
+    },
+    blocked: blockset.has(blocklistKey(domainOf(c.url))),
+  }));
+
+  const { scraped } = await scrapeSources(app, ranked, noop, now, nowIso);
+
+  return scraped.map((s) => {
+    const meta = metaByUrl.get(s.url) ?? { snippet: "", sourceQuery: s.intent };
+    const hash = contentHash(s.content || s.url);
+    return {
+      id: hash,
+      url: s.url,
+      domain: s.domain,
+      title: s.title,
+      snippet: meta.snippet,
+      content: s.content,
+      contentHash: hash,
+      sourceQuery: meta.sourceQuery,
+      loopIteration,
+    };
+  });
 }
