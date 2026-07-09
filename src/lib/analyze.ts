@@ -11,7 +11,7 @@
  */
 import OpenAI from "openai";
 import { LlmReportSchema, type LlmReport, type ScanReport, type Source } from "./schema";
-import type { ScrapedSource } from "./firecrawl";
+import type { ScrapedSource } from "./evidence/firecrawl";
 import type { TokenUsage } from "./events";
 import { opportunityScore } from "./scoring";
 import { titleCase } from "./format";
