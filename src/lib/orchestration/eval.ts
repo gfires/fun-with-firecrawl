@@ -18,8 +18,9 @@ import type { ScanEvent, TokenUsage } from "../events";
 
 /** Cost per million tokens by model (USD). Update when model pricing changes. */
 const MODEL_COST: Record<string, { input: number; output: number }> = {
-  "gpt-4o":      { input: 2.50, output: 10.00 },
-  "gpt-4o-mini": { input: 0.15, output: 0.60 },
+  "gpt-4o":         { input: 2.50, output: 10.00 },
+  "gpt-4o-mini":    { input: 0.15, output: 0.60 },
+  "claude-sonnet-5": { input: 3.00, output: 15.00 },
 };
 
 export function estimateCostUsd(usage: TokenUsage): number {
@@ -32,6 +33,35 @@ export function estimateCostUsd(usage: TokenUsage): number {
 
 /** One LLM call's usage annotated with its estimated USD cost. */
 export type AnnotatedUsage = TokenUsage & { label: string; costUsd: number };
+
+/**
+ * Build an AnnotatedUsage from a Vercel AI SDK `generateObject` result's `usage` field
+ * (`inputTokens`/`outputTokens`, both possibly undefined for providers that omit them).
+ * Every graph/committee/gate call site should route its usage through this so cost
+ * estimation stays in one place.
+ */
+export function toAnnotatedUsage(
+  usage: { inputTokens?: number; outputTokens?: number } | undefined,
+  model: string,
+  label: string,
+): AnnotatedUsage {
+  const tokenUsage: TokenUsage = {
+    model,
+    promptTokens: usage?.inputTokens ?? 0,
+    completionTokens: usage?.outputTokens ?? 0,
+  };
+  return { ...tokenUsage, label, costUsd: estimateCostUsd(tokenUsage) };
+}
+
+/** Roll up a flat list of per-call usages into the aggregated ArmTokens shape. */
+export function rollupTokens(calls: AnnotatedUsage[]): ArmTokens {
+  return {
+    calls,
+    totalPromptTokens:     calls.reduce((s, u) => s + u.promptTokens,     0),
+    totalCompletionTokens: calls.reduce((s, u) => s + u.completionTokens, 0),
+    totalCostUsd:          calls.reduce((s, u) => s + u.costUsd,          0),
+  };
+}
 
 /** Aggregated token/cost summary for one arm run. */
 export interface ArmTokens {

@@ -23,8 +23,9 @@ Integration fixes applied during graph merge:
 
 ### Must do before first end-to-end run
 - **gate.ts prompt**: `buildGatePrompt()` returns `"..."` — needs real summarization of claims/disagreements per question. This is the core VOI logic, to be written by hand.
-- **Token tracking**: `runGraph()` returns zeroed token counts. Needs `generateObject` usage callbacks captured and aggregated into `ArmResult.tokens`.
-- **compare-arms.ts output**: Currently prints token costs that will be 0 for orchestrated arm until tracking is wired.
+
+### Done (2026-07-09)
+- **Token tracking**: `ResearchState.llmCalls` (append-only `AnnotatedUsage[]`) threads through every `generateObject` call in `decompose`/`debate`/`gate` (graph.ts), `runCommittee` (committee.ts), and `allocateBudget` (gate.ts). `eval.ts` exports `toAnnotatedUsage()` (builds a usage record from a `generateObject` result) and `rollupTokens()` (aggregates into `ArmTokens`). `runGraph()` now rolls up `finalState.llmCalls` into `ArmResult.tokens` instead of returning zeros. Added `claude-sonnet-5` pricing to `MODEL_COST` in eval.ts.
 
 ### After first run
 - SSE streaming integration (wire graph node events into existing UI)

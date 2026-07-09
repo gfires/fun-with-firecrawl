@@ -21,6 +21,7 @@ import { ClaimSchema, type Claim, type AgentRoleT } from "../schemas/claim";
 import type { Evidence } from "../schemas/evidence";
 import type { Question } from "../schemas/state";
 import { modelForRole } from "../models/provider";
+import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 
 /**
  * Calibration rules appended to every role prompt. Kept identical across roles so that a
@@ -159,6 +160,12 @@ function buildUserPrompt(question: Question, evidence: Evidence[]): string {
   ].join("\n");
 }
 
+/** The four independent role Claims for one question, plus each call's token usage. */
+export interface CommitteeResult {
+  claims: Claim[];
+  usage: AnnotatedUsage[];
+}
+
 /**
  * Run the full four-role committee against one question and its relevant evidence.
  * Each role is called in parallel with its own model and produces one calibrated Claim.
@@ -166,29 +173,32 @@ function buildUserPrompt(question: Question, evidence: Evidence[]): string {
 export async function runCommittee(
   question: Question,
   evidence: Evidence[],
-): Promise<Claim[]> {
+): Promise<CommitteeResult> {
   // The loop iteration this claim belongs to = the most recent retrieval round it can see.
   const loopIteration = evidence.reduce((max, e) => Math.max(max, e.loopIteration), 0);
 
-  const claims = await Promise.all(
-    ROLES.map(async (role): Promise<Claim> => {
-      const { object } = await generateObject({
-        model: modelForRole(role),
+  const results = await Promise.all(
+    ROLES.map(async (role): Promise<{ claim: Claim; usage: AnnotatedUsage }> => {
+      const model = modelForRole(role);
+      const { object, usage } = await generateObject({
+        model,
         schema: ClaimSchema,
         system: ROLE_SYSTEM_PROMPTS[role],
         prompt: buildUserPrompt(question, evidence),
       });
 
       // Stamp the authoritative, system-owned fields — never trust the model for identity/bookkeeping.
-      return {
+      const claim: Claim = {
         ...object,
         id: `${question.id}:${role}:${loopIteration}`,
         questionId: question.id,
         agentRole: role,
         loopIteration,
       };
+
+      return { claim, usage: toAnnotatedUsage(usage, model.modelId, `committee:${role}`) };
     }),
   );
 
-  return claims;
+  return { claims: results.map((r) => r.claim), usage: results.map((r) => r.usage) };
 }

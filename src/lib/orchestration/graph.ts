@@ -30,7 +30,7 @@ import { ResearchState, type ResearchStateT, type Question } from "../schemas/st
 import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel } from "../models/provider";
-import type { ArmResult } from "./eval";
+import { type ArmResult, toAnnotatedUsage, rollupTokens } from "./eval";
 import { MIN_QUESTIONS, MAX_QUESTIONS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET } from "../params";
 
 // --- Cross-agent integration imports (implemented on sibling branches) ---------
@@ -66,7 +66,7 @@ const DecompositionSchema = z.object({
  * at zero confidence and unresolved; the `questions` reducer replaces wholesale.
  */
 async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model: managerModel,
     schema: DecompositionSchema,
     prompt: [
@@ -87,7 +87,10 @@ async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>
     resolved: false,
   }));
 
-  return { questions };
+  return {
+    questions,
+    llmCalls: [toAnnotatedUsage(usage, managerModel.modelId, "decompose")],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +135,9 @@ async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
   const batches = await Promise.all(
     questions.map((q) => runCommittee(q, state.evidence)),
   );
-  const claims: Claim[] = batches.flat();
-  return { claims };
+  const claims: Claim[] = batches.flatMap((b) => b.claims);
+  const llmCalls = batches.flatMap((b) => b.usage);
+  return { claims, llmCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -150,13 +154,14 @@ async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
  * edge can read it without re-running the policy.
  */
 async function gate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
-  const { state: next, continueLoop } = await allocateBudget(state);
+  const { state: next, continueLoop, usage } = await allocateBudget(state);
   return {
     questions: next.questions,
     loopIteration: next.loopIteration,
     budgetRemaining: next.budgetRemaining,
     budgetSpent: next.budgetSpent,
     converged: !continueLoop,
+    llmCalls: usage,
   };
 }
 
@@ -292,12 +297,7 @@ export async function runGraph(topic: string): Promise<ArmResult> {
     arm: "orchestrated",
     topic,
     report,
-    tokens: {
-      calls: [],
-      totalPromptTokens: 0,
-      totalCompletionTokens: 0,
-      totalCostUsd: 0,
-    },
+    tokens: rollupTokens(finalState.llmCalls),
     firecrawlCalls: finalState.firecrawlCalls,
     firecrawlCredits: finalState.firecrawlCredits,
     durationMs: Date.now() - t0,

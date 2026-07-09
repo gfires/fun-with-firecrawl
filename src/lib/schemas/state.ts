@@ -1,6 +1,7 @@
 import { Annotation } from "@langchain/langgraph";
 import type { Evidence } from "./evidence";
 import type { Claim } from "./claim";
+import type { AnnotatedUsage } from "../orchestration/eval";
 
 export interface Question {
   id: string;
@@ -30,5 +31,10 @@ export const ResearchState = Annotation.Root({
   firecrawlCalls: Annotation<number>({ reducer: (prev, next) => prev + next, default: () => 0 }),
   firecrawlCredits: Annotation<number>({ reducer: (prev, next) => prev + next, default: () => 0 }),
   converged: Annotation<boolean>({ reducer: (_prev, next) => next, default: () => false }),
+  /** Every LLM call made anywhere in the graph (decompose, committee, gate), append-only. */
+  llmCalls: Annotation<AnnotatedUsage[]>({
+    reducer: (prev, next) => [...prev, ...next],
+    default: () => [],
+  }),
 });
 export type ResearchStateT = typeof ResearchState.State;

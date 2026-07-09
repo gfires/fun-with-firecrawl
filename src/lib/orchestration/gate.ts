@@ -3,6 +3,7 @@ import { z } from "zod";
 import { gateModel } from "../models/provider";
 import type { ResearchStateT } from "../schemas/state";
 import { MAX_LOOP_ITERATIONS, VOI_THRESHOLD } from "../params";
+import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 
 const GapScoreSchema = z.object({
   questionId: z.string(),
@@ -13,17 +14,18 @@ const GapScoreSchema = z.object({
 
 export async function allocateBudget(
   state: ResearchStateT
-): Promise<{ state: ResearchStateT; continueLoop: boolean }> {
+): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[] }> {
   if (state.budgetRemaining <= 0 || state.loopIteration >= MAX_LOOP_ITERATIONS) {
-    return { state: { ...state, converged: true }, continueLoop: false };
+    return { state: { ...state, converged: true }, continueLoop: false, usage: [] };
   }
 
   // score every unresolved question's value of further retrieval
-  const { object: scores } = await generateObject({
+  const { object: scores, usage } = await generateObject({
     model: gateModel,
     schema: z.object({ scores: z.array(GapScoreSchema) }),
     prompt: buildGatePrompt(state), // TODO: summarize claims + disagreements per question
   });
+  const callUsage = [toAnnotatedUsage(usage, gateModel.modelId, "gate")];
 
   const ranked = scores.scores
     .map(s => ({
@@ -35,7 +37,7 @@ export async function allocateBudget(
   const worthPursuing = ranked.filter(r => r.voi > VOI_THRESHOLD);
 
   if (worthPursuing.length === 0) {
-    return { state: { ...state, converged: true }, continueLoop: false };
+    return { state: { ...state, converged: true }, continueLoop: false, usage: callUsage };
   }
 
   const questions = state.questions.map(q =>
@@ -45,6 +47,7 @@ export async function allocateBudget(
   return {
     state: { ...state, questions, loopIteration: state.loopIteration + 1 },
     continueLoop: true,
+    usage: callUsage,
   };
 }
 
