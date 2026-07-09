@@ -4,6 +4,7 @@ import { gateModel } from "../models/provider";
 import type { ResearchStateT } from "../schemas/state";
 import { MAX_LOOP_ITERATIONS, VOI_THRESHOLD } from "../params";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
+import type { VoiScore } from "../research-events";
 
 const GapScoreSchema = z.object({
   questionId: z.string(),
@@ -14,16 +15,16 @@ const GapScoreSchema = z.object({
 
 export async function allocateBudget(
   state: ResearchStateT
-): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[] }> {
+): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; voiScores: VoiScore[] }> {
   if (state.budgetRemaining <= 0 || state.loopIteration >= MAX_LOOP_ITERATIONS) {
-    return { state: { ...state, converged: true }, continueLoop: false, usage: [] };
+    return { state: { ...state, converged: true }, continueLoop: false, usage: [], voiScores: [] };
   }
 
   // score every unresolved question's value of further retrieval
   const { object: scores, usage } = await generateObject({
     model: gateModel,
     schema: z.object({ scores: z.array(GapScoreSchema) }),
-    prompt: buildGatePrompt(state), // TODO: summarize claims + disagreements per question
+    prompt: buildGatePrompt(state),
   });
   const callUsage = [toAnnotatedUsage(usage, gateModel.modelId, "gate")];
 
@@ -36,8 +37,16 @@ export async function allocateBudget(
 
   const worthPursuing = ranked.filter(r => r.voi > VOI_THRESHOLD);
 
+  const voiScores: VoiScore[] = ranked.map(r => ({
+    questionId: r.questionId,
+    voi: r.voi,
+    disagreement: r.disagreementMagnitude,
+    sensitivity: r.recommendationSensitivity,
+    tractability: r.tractability,
+  }));
+
   if (worthPursuing.length === 0) {
-    return { state: { ...state, converged: true }, continueLoop: false, usage: callUsage };
+    return { state: { ...state, converged: true }, continueLoop: false, usage: callUsage, voiScores };
   }
 
   const questions = state.questions.map(q =>
@@ -48,6 +57,7 @@ export async function allocateBudget(
     state: { ...state, questions, loopIteration: state.loopIteration + 1 },
     continueLoop: true,
     usage: callUsage,
+    voiScores,
   };
 }
 

@@ -21,11 +21,12 @@ Integration fixes applied during graph merge:
 
 ## What remains
 
-### Must do before first end-to-end run
-- **gate.ts prompt**: `buildGatePrompt()` returns `"..."` — needs real summarization of claims/disagreements per question. This is the core VOI logic, to be written by hand.
-
 ### Done (2026-07-09)
+- **gate.ts prompt**: `buildGatePrompt()` now summarizes each unresolved question's claims (role, conclusion, confidence, supporting/contradicting evidence counts, missing evidence) so the gate model can score disagreement magnitude, recommendation sensitivity, and tractability.
 - **Token tracking**: `ResearchState.llmCalls` (append-only `AnnotatedUsage[]`) threads through every `generateObject` call in `decompose`/`debate`/`gate` (graph.ts), `runCommittee` (committee.ts), and `allocateBudget` (gate.ts). `eval.ts` exports `toAnnotatedUsage()` (builds a usage record from a `generateObject` result) and `rollupTokens()` (aggregates into `ArmTokens`). `runGraph()` now rolls up `finalState.llmCalls` into `ArmResult.tokens` instead of returning zeros. Added `claude-sonnet-5` pricing to `MODEL_COST` in eval.ts.
+- **Single-arm runner**: `scripts/run-arm.ts` runs either the baseline or orchestrated arm in isolation. Both scripts accept `--budget` to override `TOTAL_FIRECRAWL_BUDGET` without editing `params.ts`.
+- **Params consolidation**: Orchestration tunables (`RESULTS_PER_QUESTION`, `MAX_LOOP_ITERATIONS`, `TOTAL_FIRECRAWL_BUDGET`, `VOI_THRESHOLD`, `MIN/MAX_QUESTIONS`) moved from gate.ts and graph.ts into `src/lib/params.ts`.
+- **Real-time orchestration visualization**: SSE streaming from LangGraph nodes via `graph-stream.ts` + `/api/research/orchestrated` route. Frontend `useResearchStream` hook with pure reducer. Live UI: SVG pipeline graph with loop arc, question tracker with confidence bars, 4-agent debate panel, evidence feed, gate decision table with VOI scores, cost counter. Mode toggle on landing page: "Industry Scan" vs "Deep Research".
 
 ### After first run
 - SSE streaming integration (wire graph node events into existing UI)
@@ -44,14 +45,43 @@ Integration fixes applied during graph merge:
 | `src/lib/evidence/store.ts` | In-memory Evidence store + contentHash |
 | `src/lib/orchestration/graph.ts` | StateGraph + runGraph() + synthesizeReport() |
 | `src/lib/orchestration/committee.ts` | runCommittee() — four-role deliberation |
-| `src/lib/orchestration/gate.ts` | allocateBudget() — VOI scoring (prompt incomplete) |
-| `src/lib/orchestration/eval.ts` | ArmResult types + runBaseline() |
-| `scripts/compare-arms.ts` | A/B comparison harness |
+| `src/lib/orchestration/gate.ts` | allocateBudget() — VOI scoring with per-question claim summaries |
+| `src/lib/orchestration/eval.ts` | ArmResult types + runBaseline() + toAnnotatedUsage() + rollupTokens() |
+| `src/lib/params.ts` | Orchestration tunables (budget, thresholds, loop limits) |
+| `scripts/compare-arms.ts` | A/B comparison harness (accepts --budget) |
+| `src/lib/research-events.ts` | ResearchEvent union (SSE wire protocol for orchestration) |
+| `src/lib/orchestration/graph-stream.ts` | runGraphStreaming() — streaming graph runner |
+| `src/lib/useResearchStream.ts` | Frontend hook + reducer for research SSE |
+| `src/app/api/research/orchestrated/route.ts` | SSE endpoint for orchestrated research |
+| `src/components/research/` | Visualization components (PipelineGraph, AgentPanel, etc.) |
+| `scripts/run-arm.ts` | Single-arm runner (baseline or orchestrated, accepts --budget) |
 
 ## Build & check
 
 ```
 npx tsc --noEmit        # typecheck (should be clean)
 npx vitest run           # tests
-npm run compare -- "freight brokerage"   # run both arms
+npm run compare -- "freight brokerage"              # run both arms
+npx tsx scripts/run-arm.ts orchestrated "freight brokerage"  # single arm
+npx tsx scripts/run-arm.ts baseline "freight brokerage" --budget 20  # with budget override
 ```
+
+## Skill routing
+
+When the user's request matches an available skill, ALWAYS invoke it using the Skill
+tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
+The skill has specialized workflows that produce better results than ad-hoc answers.
+
+Key routing rules:
+- Product ideas, "is this worth building", brainstorming → invoke office-hours
+- Bugs, errors, "why is this broken", 500 errors → invoke investigate
+- Ship, deploy, push, create PR → invoke ship
+- QA, test the site, find bugs → invoke qa
+- Code review, check my diff → invoke review
+- Update docs after shipping → invoke document-release
+- Weekly retro → invoke retro
+- Design system, brand → invoke design-consultation
+- Visual audit, design polish → invoke design-review
+- Architecture review → invoke plan-eng-review
+- Save progress, checkpoint, resume → invoke checkpoint
+- Code quality, health check → invoke health

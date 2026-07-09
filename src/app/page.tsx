@@ -1,54 +1,102 @@
-/**
- * page.tsx — the single page. Three states, driven by useScanStream:
- *   idle     → ScanInput (landing)
- *   running  → ScanProgress (live exploration visualization)
- *   done+ok  → ReportView (the diagnostic report)
- *   done+err → error card with retry
- *
- * No routing, no persistence — one-shot, exactly as specced.
- */
 "use client";
 
+import { useState } from "react";
 import { useScanStream } from "@/lib/useScanStream";
-import { ScanInput } from "@/components/ScanInput";
+import { useResearchStream } from "@/lib/useResearchStream";
+import { ScanInput, type RunMode } from "@/components/ScanInput";
 import { ScanProgress } from "@/components/ScanProgress";
 import { ReportView } from "@/components/ReportView";
+import { ResearchProgress } from "@/components/research/ResearchProgress";
+import { ResearchReportView } from "@/components/research/ResearchReportView";
 import { Leaderboard } from "@/components/Leaderboard";
+import type { ResearchReport } from "@/lib/orchestration/graph";
 
 export default function Home() {
-  const { state, start, reset } = useScanStream();
+  const [mode, setMode] = useState<RunMode>("scan");
+  const scan = useScanStream();
+  const research = useResearchStream();
 
-  const showReport = state.report && !state.running;
-  const showError = state.error && !state.running;
-  const showProgress = state.running || (!state.report && !state.error && state.phase !== "idle");
+  const isIdle = scan.state.phase === "idle" && research.state.phase === "idle";
+
+  const handleRun = (topic: string) => {
+    if (mode === "research") {
+      scan.reset();
+      research.start(topic);
+    } else {
+      research.reset();
+      scan.start(topic);
+    }
+  };
+
+  const handleReset = () => {
+    scan.reset();
+    research.reset();
+  };
+
+  // Scan state derivation
+  const scanShowReport = scan.state.report && !scan.state.running;
+  const scanShowError = scan.state.error && !scan.state.running;
+  const scanShowProgress = scan.state.running || (!scan.state.report && !scan.state.error && scan.state.phase !== "idle");
+
+  // Research state derivation
+  const researchReport = research.state.report;
+  const researchShowReport = researchReport && !research.state.running;
+  const researchShowError = research.state.error && !research.state.running;
+  const researchShowProgress = research.state.running || (!researchReport && !research.state.error && research.state.phase !== "idle");
 
   return (
     <main className="min-h-screen px-4 py-10 sm:py-16">
       {/* Idle / landing */}
-      {state.phase === "idle" && (
+      {isIdle && (
         <div className="flex min-h-[70vh] flex-col items-center justify-center">
-          <ScanInput onRun={start} disabled={state.running} />
+          <ScanInput onRun={handleRun} disabled={scan.state.running || research.state.running} mode={mode} onModeChange={setMode} />
           <Leaderboard />
         </div>
       )}
 
-      {/* Live exploration */}
-      {showProgress && (
+      {/* Scan: live exploration */}
+      {scanShowProgress && (
         <div className="pt-4">
-          <ScanProgress state={state} />
+          <ScanProgress state={scan.state} />
         </div>
       )}
 
-      {/* Report — includes the finished exploration trace so the search/scrape path stays inspectable. */}
-      {showReport && <ReportView report={state.report!} scan={state} onReset={reset} />}
+      {/* Scan: report */}
+      {scanShowReport && <ReportView report={scan.state.report!} scan={scan.state} onReset={handleReset} />}
 
-      {/* Error */}
-      {showError && (
+      {/* Research: live progress */}
+      {researchShowProgress && (
+        <div className="pt-4">
+          <ResearchProgress state={research.state} />
+        </div>
+      )}
+
+      {/* Research: report */}
+      {researchShowReport && (
+        <ResearchReportView report={researchReport as ResearchReport} scan={research.state} onReset={handleReset} />
+      )}
+
+      {/* Scan error */}
+      {scanShowError && (
         <div className="mx-auto mt-10 max-w-md panel p-6 text-center">
           <div className="eyebrow mb-2 text-danger">Scan failed</div>
-          <p className="text-sm text-fg/85">{state.error}</p>
+          <p className="text-sm text-fg/85">{scan.state.error}</p>
           <button
-            onClick={reset}
+            onClick={handleReset}
+            className="mt-4 rounded-lg border border-line px-5 py-2 font-mono text-sm text-fg transition hover:border-accent hover:text-accent"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {/* Research error */}
+      {researchShowError && (
+        <div className="mx-auto mt-10 max-w-md panel p-6 text-center">
+          <div className="eyebrow mb-2 text-danger">Research failed</div>
+          <p className="text-sm text-fg/85">{research.state.error}</p>
+          <button
+            onClick={handleReset}
             className="mt-4 rounded-lg border border-line px-5 py-2 font-mono text-sm text-fg transition hover:border-accent hover:text-accent"
           >
             Try again

@@ -205,7 +205,8 @@ src/
     exportPdf.ts                  client-side PDF export
   components/                     ScanInput, ScanProgress, ReportView, Gauge, ...
 scripts/
-  compare-arms.ts                 A/B comparison harness
+  compare-arms.ts                 A/B comparison harness (accepts --budget)
+  run-arm.ts                      single-arm runner (baseline or orchestrated, accepts --budget)
 test/                             vitest unit tests
 data/
   blocklist.json                  domains that block scrapers
@@ -222,6 +223,8 @@ npx tsc --noEmit       # typecheck
 npx vitest run         # unit tests
 npm run dev            # dev server at http://localhost:3000
 npm run compare -- "freight brokerage"   # A/B comparison
+npx tsx scripts/run-arm.ts orchestrated "freight brokerage"  # single arm
+npx tsx scripts/run-arm.ts baseline "topic" --budget 20      # with budget override
 ```
 
 ---

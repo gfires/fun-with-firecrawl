@@ -1,15 +1,19 @@
-/**
- * ScanInput — the landing state: title, industry field, example chips, and the Run button.
- * Purely presentational; the parent page owns the scan lifecycle.
- */
 "use client";
 
 import { useState } from "react";
 
-/** Curated examples that show the tool's range and invite a click. */
+export type RunMode = "scan" | "research";
+
 const EXAMPLES = ["college athletics", "construction permitting", "insurance claims", "industrial ergonomics"];
 
-export function ScanInput({ onRun, disabled }: { onRun: (industry: string) => void; disabled?: boolean }) {
+interface Props {
+  onRun: (industry: string) => void;
+  disabled?: boolean;
+  mode: RunMode;
+  onModeChange: (mode: RunMode) => void;
+}
+
+export function ScanInput({ onRun, disabled, mode, onModeChange }: Props) {
   const [value, setValue] = useState("");
 
   const run = () => {
@@ -28,7 +32,29 @@ export function ScanInput({ onRun, disabled }: { onRun: (industry: string) => vo
         opportunities. See what the market isn't seeing.
       </p>
 
-      <div className="mt-8 flex items-stretch gap-2">
+      {/* Mode toggle */}
+      <div className="mt-6 flex justify-center gap-1">
+        <button
+          onClick={() => onModeChange("scan")}
+          className={`rounded-l-lg border px-4 py-1.5 font-mono text-xs transition
+            ${mode === "scan"
+              ? "border-accent bg-accent/10 text-accent"
+              : "border-line text-mute hover:text-fg"}`}
+        >
+          Industry Scan
+        </button>
+        <button
+          onClick={() => onModeChange("research")}
+          className={`rounded-r-lg border px-4 py-1.5 font-mono text-xs transition
+            ${mode === "research"
+              ? "border-accent bg-accent/10 text-accent"
+              : "border-line text-mute hover:text-fg"}`}
+        >
+          Deep Research
+        </button>
+      </div>
+
+      <div className="mt-4 flex items-stretch gap-2">
         <div className="relative flex-1">
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-accent">
             &gt;
@@ -39,7 +65,7 @@ export function ScanInput({ onRun, disabled }: { onRun: (industry: string) => vo
             disabled={disabled}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && run()}
-            placeholder="enter an industry…"
+            placeholder={mode === "research" ? "enter a topic…" : "enter an industry…"}
             className="w-full rounded-lg border border-line bg-panel py-3 pl-9 pr-3 font-mono text-fg
                        placeholder:text-mute focus:border-accent focus:outline-none disabled:opacity-50"
           />
@@ -50,7 +76,7 @@ export function ScanInput({ onRun, disabled }: { onRun: (industry: string) => vo
           className="rounded-lg bg-accent px-5 font-mono text-sm font-semibold text-ink
                      transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Run Scan
+          {mode === "research" ? "Run Research" : "Run Scan"}
         </button>
       </div>
 
