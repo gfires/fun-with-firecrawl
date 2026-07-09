@@ -281,13 +281,13 @@ export function compileResearchGraph() {
   return workflow.compile({ checkpointer });
 }
 
-export async function runGraph(topic: string): Promise<ArmResult> {
+export async function runGraph(topic: string, budgetOverride?: number): Promise<ArmResult> {
   const graph = compileResearchGraph();
   const threadId = `run-${Date.now()}`;
   const t0 = Date.now();
 
   const finalState: ResearchStateT = await graph.invoke(
-    { topic, budgetRemaining: TOTAL_FIRECRAWL_BUDGET },
+    { topic, budgetRemaining: budgetOverride ?? TOTAL_FIRECRAWL_BUDGET },
     { configurable: { thread_id: threadId } },
   );
 

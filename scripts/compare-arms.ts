@@ -27,11 +27,24 @@ if (existsSync(envPath)) {
 import { runBaseline } from "../src/lib/orchestration/eval";
 import type { ArmResult, ComparisonResult } from "../src/lib/orchestration/eval";
 
-const topic = process.argv[2]?.trim();
+const cliArgs = process.argv.slice(2);
+const budgetFlag = cliArgs.find((a) => a.startsWith("--budget="));
+const positional = cliArgs.filter((a) => !a.startsWith("--budget="));
+
+const topic = positional[0]?.trim();
 if (!topic) {
-  console.error("Usage: tsx scripts/compare-arms.ts <topic>");
-  console.error('Example: tsx scripts/compare-arms.ts "commercial real estate"');
+  console.error("Usage: tsx scripts/compare-arms.ts <topic> [--budget=N]");
+  console.error('Example: tsx scripts/compare-arms.ts "commercial real estate" --budget=50');
   process.exit(1);
+}
+
+let budgetOverride: number | undefined;
+if (budgetFlag) {
+  budgetOverride = Number(budgetFlag.slice("--budget=".length));
+  if (!Number.isFinite(budgetOverride) || budgetOverride <= 0) {
+    console.error(`Invalid --budget value: ${budgetFlag}`);
+    process.exit(1);
+  }
 }
 
 async function runOrchestrated(
@@ -40,9 +53,9 @@ async function runOrchestrated(
   try {
     // Dynamic import so missing graph.ts is a runtime stub, not a compile error.
     const mod = await import("../src/lib/orchestration/graph");
-    const fn = (mod as { runGraph?: (t: string) => Promise<ArmResult> }).runGraph;
+    const fn = (mod as { runGraph?: (t: string, budget?: number) => Promise<ArmResult> }).runGraph;
     if (typeof fn !== "function") throw new Error("runGraph not exported");
-    return await fn(t);
+    return await fn(t, budgetOverride);
   } catch {
     return {
       arm: "orchestrated" as const,
