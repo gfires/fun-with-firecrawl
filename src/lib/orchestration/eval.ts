@@ -9,7 +9,7 @@
  * for now the compare script stubs it. Both arms write into ComparisonResult so a human
  * can open one JSON file and read output + cost side-by-side.
  */
-import { explore } from "../firecrawl";
+import { explore } from "../evidence/firecrawl";
 import { callLLM, assembleReport } from "../analyze";
 import { normalizeIndustry } from "../intents";
 import type { ScanReport } from "../schema";
