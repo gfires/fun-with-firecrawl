@@ -49,7 +49,39 @@ export async function allocateBudget(
 }
 
 function buildGatePrompt(state: ResearchStateT): string {
-  // summarize each question's claims (conclusion + confidence + contradiction count)
-  // keep this short — it's the one prompt you should hand-tune the most
-  return `...`; // fill in once you see real committee output
+  const unresolved = state.questions.filter(q => !q.resolved);
+
+  const sections = unresolved.map(q => {
+    const claims = state.claims.filter(c => c.questionId === q.id);
+
+    const claimLines = claims.length
+      ? claims
+          .map(c => {
+            const missing = c.missingEvidence.length
+              ? c.missingEvidence.join("; ")
+              : "none noted";
+            return `  - [${c.agentRole}] conclusion: "${c.conclusion}" | confidence: ${c.confidence.toFixed(
+              2
+            )} | supporting: ${c.supportingEvidenceIds.length} | contradicting: ${
+              c.contradictingEvidenceIds.length
+            } | missing evidence: ${missing}`;
+          })
+          .join("\n")
+      : "  - no claims yet";
+
+    return `Question ${q.id} (${q.category}): ${q.text}\n${claimLines}`;
+  });
+
+  return `You are scoring the value of further retrieval for each unresolved research question below.
+
+For each question, the committee's per-agent claims are listed with their conclusion, confidence, evidence counts, and noted evidence gaps.
+
+Score each question on three axes (0-1):
+- disagreementMagnitude: how much the agents' conclusions and confidences diverge
+- recommendationSensitivity: how much resolving this question would change the final recommendation
+- tractability: how likely additional retrieval is to actually close the gap (based on missing evidence and contradiction counts)
+
+${sections.join("\n\n")}
+
+Return a score for every question ID listed above.`;
 }
