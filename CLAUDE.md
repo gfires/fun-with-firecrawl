@@ -1,37 +1,8 @@
-# Project Status
+# Project Guide
 
-## What this is
+Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions, a committee (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) debates structured claims, and a VOI gate allocates further retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
 
-Adaptive multi-agent research system built on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions, a committee of expert agents (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) debates structured claims, and a VOI gate allocates further retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side for direct comparison.
-
-## What was just completed (2026-07-09)
-
-All four parallel agent branches merged into main:
-
-- **evidence**: `src/lib/evidence/firecrawl.ts` — refactored Firecrawl search/scrape into `search(queries, k, loopIteration) → Evidence[]` with dedup and caching. `evidence/store.ts` has in-memory Evidence store + contentHash.
-- **committee**: `src/lib/orchestration/committee.ts` — four-role calibrated deliberation via `runCommittee(question, evidence) → Claim[]` using `generateObject`.
-- **eval**: `src/lib/orchestration/eval.ts` + `scripts/compare-arms.ts` — baseline arm harness (`runBaseline`) and A/B comparison script. `ArmResult.report` is `ScanReport | ResearchReport`.
-- **graph**: `src/lib/orchestration/graph.ts` — LangGraph StateGraph (decompose → retrieve → debate → gate → recommend). Exports `compileResearchGraph()`, `synthesizeReport()`, and `runGraph(topic) → ArmResult`.
-
-Integration fixes applied during graph merge:
-- `allocateBudget` call awaited (main's gate.ts is async)
-- `firecrawlCalls`/`firecrawlCredits` counters added to `ResearchState`
-- Evidence zod schema aligned to match `search()` output (domain+content, not retrievedAt)
-- `ArmResult.report` widened to `ScanReport | ResearchReport`
-
-## What remains
-
-### Done (2026-07-09)
-- **gate.ts prompt**: `buildGatePrompt()` now summarizes each unresolved question's claims (role, conclusion, confidence, supporting/contradicting evidence counts, missing evidence) so the gate model can score disagreement magnitude, recommendation sensitivity, and tractability.
-- **Token tracking**: `ResearchState.llmCalls` (append-only `AnnotatedUsage[]`) threads through every `generateObject` call in `decompose`/`debate`/`gate` (graph.ts), `runCommittee` (committee.ts), and `allocateBudget` (gate.ts). `eval.ts` exports `toAnnotatedUsage()` (builds a usage record from a `generateObject` result) and `rollupTokens()` (aggregates into `ArmTokens`). `runGraph()` now rolls up `finalState.llmCalls` into `ArmResult.tokens` instead of returning zeros. Added `claude-sonnet-5` pricing to `MODEL_COST` in eval.ts.
-- **Single-arm runner**: `scripts/run-arm.ts` runs either the baseline or orchestrated arm in isolation. Both scripts accept `--budget` to override `TOTAL_FIRECRAWL_BUDGET` without editing `params.ts`.
-- **Params consolidation**: Orchestration tunables (`RESULTS_PER_QUESTION`, `MAX_LOOP_ITERATIONS`, `TOTAL_FIRECRAWL_BUDGET`, `VOI_THRESHOLD`, `MIN/MAX_QUESTIONS`) moved from gate.ts and graph.ts into `src/lib/params.ts`.
-- **Real-time orchestration visualization**: SSE streaming from LangGraph nodes via `graph-stream.ts` + `/api/research/orchestrated` route. Frontend `useResearchStream` hook with pure reducer. Live UI: SVG pipeline graph with loop arc, question tracker with confidence bars, 4-agent debate panel, evidence feed, gate decision table with VOI scores, cost counter. Mode toggle on landing page: "Industry Scan" vs "Deep Research".
-
-### After first run
-- SSE streaming integration (wire graph node events into existing UI)
-- End-to-end test on "freight brokerage"
-- Tune VOI_THRESHOLD (currently 0.15) and BUDGET constants based on real output
+**Current status, changelog, and open issues live in [STATUS.md](STATUS.md).** This file holds stable reference only.
 
 ## Key files
 

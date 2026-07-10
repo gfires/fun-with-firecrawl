@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { MAX_RUN_COST_USD } from "../params";
 import { estimateCostUsd } from "./eval";
 import type { TokenUsage } from "../events";
@@ -9,6 +10,22 @@ export class BudgetExceededError extends Error {
   }
 }
 
+/**
+ * Tracks cumulative LLM spend against a hard USD cap for a single research run.
+ *
+ * Every number that touches `spent` is a REAL `usage` figure from a completed call —
+ * we never estimate a call's cost before it runs. `check()` gates a call by asking
+ * "have we already spent the cap?"; `record()` books the exact cost on completion.
+ *
+ * CONCURRENCY: the graph fans out up to ~20 `generateObject` calls at once (the
+ * committee runs 4 roles × N questions in parallel). `record()` is a plain synchronous
+ * `+=`, and JS is single-threaded, so the increments themselves cannot corrupt each
+ * other — no mutex needed. The only imprecision is that a whole fan-out wave can pass
+ * `check()` before any of them has recorded, so spend can overshoot the cap by at most
+ * one super-step's worth of calls. We accept that bounded overshoot rather than reserve
+ * against a *guessed* pre-call cost — every recorded dollar stays exact, and the next
+ * `check()` after the wave settles halts the run.
+ */
 class CostTracker {
   private spent = 0;
   private cap: number;
@@ -17,12 +34,14 @@ class CostTracker {
     this.cap = cap;
   }
 
+  /** Gate before a call: throws if settled spend has already reached the cap. */
   check(): void {
     if (this.spent >= this.cap) {
       throw new BudgetExceededError(this.spent, this.cap);
     }
   }
 
+  /** Book a completed call's exact cost. Returns that cost. */
   record(usage: TokenUsage): number {
     const cost = estimateCostUsd(usage);
     this.spent += cost;
@@ -38,13 +57,22 @@ class CostTracker {
   }
 }
 
-let activeTracker: CostTracker | null = null;
+/**
+ * Per-run isolation. The tracker lives in AsyncLocalStorage keyed to the run's async
+ * call-tree, NOT a module global — so two concurrent research runs (two browser tabs,
+ * compare-arms running both arms) each see their OWN tracker and never clobber each
+ * other's spend. Every `getActiveCostTracker()` beneath `runWithCostTracker` in the
+ * async tree resolves to that run's tracker.
+ */
+const storage = new AsyncLocalStorage<CostTracker>();
 
-export function startCostTracker(cap?: number): CostTracker {
-  activeTracker = new CostTracker(cap ?? MAX_RUN_COST_USD);
-  return activeTracker;
+export function runWithCostTracker<T>(fn: () => Promise<T>, cap?: number): Promise<T> {
+  const tracker = new CostTracker(cap ?? MAX_RUN_COST_USD);
+  return storage.run(tracker, fn);
 }
 
 export function getActiveCostTracker(): CostTracker | null {
-  return activeTracker;
+  return storage.getStore() ?? null;
 }
+
+export type { CostTracker };

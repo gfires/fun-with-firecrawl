@@ -13,6 +13,14 @@ export interface Question {
   searchQueries?: string[];  // refined queries from missingEvidence; falls back to text
 }
 
+/**
+ * Additive reducer for the budget channels. Nodes return a signed DELTA and the
+ * reducer accumulates it onto the running total. Accumulation is order-independent,
+ * so two nodes updating budget in the same super-step can't lose an update the way a
+ * last-write-wins replace reducer would. Exported for direct unit testing.
+ */
+export const accumulate = (prev: number, delta: number): number => prev + delta;
+
 export const ResearchState = Annotation.Root({
   topic: Annotation<string>,
   questions: Annotation<Question[]>({
@@ -28,8 +36,13 @@ export const ResearchState = Annotation.Root({
     default: () => [],
   }),
   loopIteration: Annotation<number>({ reducer: (_prev, next) => next, default: () => 0 }),
-  budgetRemaining: Annotation<number>({ reducer: (_prev, next) => next, default: () => 0 }),
-  budgetSpent: Annotation<number>({ reducer: (_prev, next) => next, default: () => 0 }),
+  // budgetRemaining/budgetSpent use ADDITIVE reducers: nodes return a signed DELTA,
+  // not an absolute value. A replace reducer would silently drop one decrement if two
+  // nodes wrote budget in the same super-step (last-write-wins); accumulating deltas is
+  // order-independent and race-free. The initial budgetRemaining is seeded via a delta
+  // from the run entrypoint (see runGraph), since default() starts at 0.
+  budgetRemaining: Annotation<number>({ reducer: accumulate, default: () => 0 }),
+  budgetSpent: Annotation<number>({ reducer: accumulate, default: () => 0 }),
   firecrawlCalls: Annotation<number>({ reducer: (prev, next) => prev + next, default: () => 0 }),
   firecrawlCredits: Annotation<number>({ reducer: (prev, next) => prev + next, default: () => 0 }),
   converged: Annotation<boolean>({ reducer: (_prev, next) => next, default: () => false }),

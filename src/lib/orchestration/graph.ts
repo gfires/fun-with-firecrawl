@@ -33,7 +33,7 @@ import { managerModel } from "../models/provider";
 import { type ArmResult, toAnnotatedUsage, rollupTokens } from "./eval";
 import { MIN_QUESTIONS, MAX_QUESTIONS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
-import { getActiveCostTracker, startCostTracker, BudgetExceededError } from "./cost-tracker";
+import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
 // --- Cross-agent integration imports (implemented on sibling branches) ---------
 // evidence/firecrawl.ts: batch web search (queries, k, loop) → tagged Evidence.
@@ -137,12 +137,14 @@ async function retrieve(state: ResearchStateT): Promise<Partial<ResearchStateT>>
     state.loopIteration,
   );
   const totalCredits = searchCredits + scrapeCredits;
+  // budgetRemaining/budgetSpent reducers are ADDITIVE — return signed deltas, not
+  // absolutes. Spending `totalCredits` credits: remaining goes down, spent goes up.
   return {
     evidence,
     firecrawlCalls: queries.length,
     firecrawlCredits: totalCredits,
-    budgetRemaining: state.budgetRemaining - totalCredits,
-    budgetSpent: state.budgetSpent + totalCredits,
+    budgetRemaining: -totalCredits,
+    budgetSpent: totalCredits,
   };
 }
 
@@ -179,11 +181,13 @@ async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
  */
 async function gate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
   const { state: next, continueLoop, usage, gateScores } = await allocateBudget(state);
+  // NB: allocateBudget does not spend Firecrawl credits — it only resolves questions
+  // and advances loopIteration. So gate returns NO budget delta; budgetRemaining/
+  // budgetSpent are owned solely by `retrieve`. Returning them here would double-count
+  // under the additive reducer.
   return {
     questions: next.questions,
     loopIteration: next.loopIteration,
-    budgetRemaining: next.budgetRemaining,
-    budgetSpent: next.budgetSpent,
     converged: !continueLoop,
     llmCalls: usage,
     gateScores,
@@ -382,9 +386,15 @@ export function compileResearchGraph() {
   return workflow.compile({ checkpointer });
 }
 
-export async function runGraph(topic: string, budgetOverride?: number): Promise<ArmResult> {
+export function runGraph(topic: string, budgetOverride?: number): Promise<ArmResult> {
+  // Run the whole graph inside a per-run cost tracker (AsyncLocalStorage) so every
+  // getActiveCostTracker() in the async tree resolves to THIS run's tracker — two
+  // concurrent runs never share or clobber each other's spend.
+  return runWithCostTracker(() => runGraphInner(topic, budgetOverride));
+}
+
+async function runGraphInner(topic: string, budgetOverride?: number): Promise<ArmResult> {
   const trace = startTrace();
-  startCostTracker();
   const graph = compileResearchGraph();
   const threadId = `run-${Date.now()}`;
   const t0 = Date.now();

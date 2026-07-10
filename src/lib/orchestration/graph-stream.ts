@@ -8,15 +8,24 @@ import type { AnnotatedUsage } from "./eval";
 import type { ResearchEvent, GateScore } from "../research-events";
 import { TOTAL_FIRECRAWL_BUDGET } from "../params";
 import { startTrace } from "./trace";
-import { startCostTracker, BudgetExceededError } from "./cost-tracker";
+import { runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
-export async function runGraphStreaming(
+export function runGraphStreaming(
+  topic: string,
+  send: (event: ResearchEvent) => void,
+  budgetOverride?: number,
+): Promise<ArmResult> {
+  // Per-run cost tracker via AsyncLocalStorage — see runWithCostTracker. Isolates
+  // this run's spend from any other concurrent run in the same process.
+  return runWithCostTracker(() => runGraphStreamingInner(topic, send, budgetOverride));
+}
+
+async function runGraphStreamingInner(
   topic: string,
   send: (event: ResearchEvent) => void,
   budgetOverride?: number,
 ): Promise<ArmResult> {
   const trace = startTrace();
-  startCostTracker();
   const graph = compileResearchGraph();
   const threadId = `run-${Date.now()}`;
   const t0 = Date.now();

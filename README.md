@@ -164,14 +164,25 @@ Two independent budget systems keep runs in check:
 **Firecrawl credits** (`TOTAL_FIRECRAWL_BUDGET`, default 80) — denominated in Firecrawl credits
 (search = 2 credits, scrape = 1 credit per page):
 - `budgetRemaining` / `budgetSpent` tracked in `ResearchState`, decremented by the `retrieve` node.
+- Both use **additive reducers**: nodes return a signed *delta*, not an absolute, and the reducer
+  accumulates. This is order-independent, so two nodes updating budget in the same LangGraph
+  super-step can't lose an update the way a last-write-wins replace reducer would. `retrieve` is
+  the sole writer (`budgetRemaining: -credits`, `budgetSpent: +credits`); `gate` never touches
+  budget. The initial budget is seeded as a delta onto the default of 0.
 - `retrieve` caps query count to `floor(budgetRemaining / 4)` so search alone doesn't blow the budget.
 - `gate` clamps: if the LLM requests more retrievals than budget allows, only top-N by `gapCount` proceed.
 
-**LLM cost cap** (`MAX_RUN_COST_USD`, default $2.00) — a global USD ceiling enforced by a
-process-level `CostTracker` (`cost-tracker.ts`). Every `generateObject` call checks the cap
-before executing and records its cost after. If the cap is hit mid-run, a `BudgetExceededError`
-is caught — the run immediately synthesizes a partial report from whatever state has accumulated,
-writes the trace, and returns results to the UI.
+**LLM cost cap** (`MAX_RUN_COST_USD`, default $2.00) — a per-run USD ceiling enforced by a
+`CostTracker` (`cost-tracker.ts`). The tracker lives in `AsyncLocalStorage` keyed to each run's
+async call-tree (via `runWithCostTracker`), **not** a module global — so two concurrent runs (two
+browser tabs, or compare-arms running both arms) each see their own tracker and never clobber each
+other's spend. Every `generateObject` call checks the cap before executing and records its *exact*
+cost (from the call's real `usage`) after — no pre-call cost estimation. Because the graph fans out
+~20 committee calls at once, a single fan-out wave can overshoot the cap by up to one super-step's
+spend before any call settles; the next `check()` then halts the run. We accept that bounded, fully
+accounted overshoot rather than reserve against a guessed pre-call cost. If the cap is hit mid-run, a
+`BudgetExceededError` is caught — the run immediately synthesizes a partial report from whatever
+state has accumulated, writes the trace, and returns results to the UI.
 
 **Token efficiency** — output tokens are the expensive side ($15/M for Sonnet 5, $10/M for GPT-4o):
 - Committee agents use `ClaimOutputSchema` (5 fields) instead of the full `ClaimSchema` (9 fields),
