@@ -26,7 +26,7 @@ import { domainOf, truncate } from "../format";
 import { loadBlocklist, blocklistKey, isHardBlock, recordBlock } from "../blocklist";
 import { getCache, setCache } from "../scrape-cache";
 import { getSearchCache, setSearchCache } from "../search-cache";
-import { MAX_CHARS_PER_PAGE, SCRAPE_TIMEOUT_MS, SCRAPE_CONCURRENCY, RESULTS_PER_INTENT, MAX_SCRAPE, QUOTA_FLOOR } from "../params";
+import { MAX_CHARS_PER_PAGE, SCRAPE_TIMEOUT_MS, SCRAPE_CONCURRENCY, RESULTS_PER_INTENT, MAX_SCRAPE, QUOTA_FLOOR, SEARCH_CANDIDATES_PER_QUESTION } from "../params";
 import { makeIntents, scoreCandidates, selectSources, triageModel, type Candidate } from "../triage";
 import { type Evidence, contentHash } from "./store";
 
@@ -359,11 +359,17 @@ export async function explore(
  * Wraps the existing Firecrawl search+scrape pipeline without LLM triage.
  * Each result is tagged with sourceQuery (the query that surfaced it) and loopIteration.
  */
+export interface SearchResult {
+  evidence: Evidence[];
+  searchCredits: number;
+  scrapeCredits: number;
+}
+
 export async function search(
   queries: string[],
   k: number,
   loopIteration: number,
-): Promise<Evidence[]> {
+): Promise<SearchResult> {
   const app = makeFirecrawl();
   const now: Clock = () => Date.now();
   const nowIso = new Date().toISOString();
@@ -372,6 +378,9 @@ export async function search(
   // Track per-URL snippet and the query that surfaced each URL first.
   const metaByUrl = new Map<string, { snippet: string; sourceQuery: string }>();
 
+  const fetchLimit = SEARCH_CANDIDATES_PER_QUESTION;
+  let searchCredits = 0;
+
   const perQuery = await Promise.all(
     queries.map(async (query) => {
       try {
@@ -379,7 +388,8 @@ export async function search(
         const raw = cached
           ? cached
           : await (async () => {
-              const res = await app.search(query, { limit: k });
+              searchCredits += 2;
+              const res = await app.search(query, { limit: fetchLimit });
               const hits = (res.data ?? [])
                 .filter((d) => d.url)
                 .map((d) => ({
@@ -418,21 +428,36 @@ export async function search(
     blocked: blockset.has(blocklistKey(domainOf(c.url))),
   }));
 
-  const { scraped } = await scrapeSources(app, ranked, noop, now, nowIso);
+  const { scraped, apiCalls: scrapeCredits } = await scrapeSources(app, ranked, noop, now, nowIso);
 
-  return scraped.map((s) => {
-    const meta = metaByUrl.get(s.url) ?? { snippet: "", sourceQuery: s.intent };
-    const hash = contentHash(s.content || s.url);
-    return {
-      id: hash,
-      url: s.url,
-      domain: s.domain,
-      title: s.title,
-      snippet: meta.snippet,
-      content: s.content,
-      contentHash: hash,
-      sourceQuery: meta.sourceQuery,
-      loopIteration,
-    };
+  const withContent = scraped.filter((s) => s.content.length > 0);
+
+  // Cap per source query so each question gets up to k usable sources.
+  const seen = new Map<string, number>();
+  const capped = withContent.filter((s) => {
+    const query = metaByUrl.get(s.url)?.sourceQuery ?? s.intent;
+    const count = seen.get(query) ?? 0;
+    if (count >= k) return false;
+    seen.set(query, count + 1);
+    return true;
   });
+
+  const evidence = capped
+    .map((s) => {
+      const meta = metaByUrl.get(s.url) ?? { snippet: "", sourceQuery: s.intent };
+      const hash = contentHash(s.content || s.url);
+      return {
+        id: hash,
+        url: s.url,
+        domain: s.domain,
+        title: s.title,
+        snippet: meta.snippet,
+        content: s.content,
+        contentHash: hash,
+        sourceQuery: meta.sourceQuery,
+        loopIteration,
+      };
+    });
+
+  return { evidence, searchCredits, scrapeCredits };
 }

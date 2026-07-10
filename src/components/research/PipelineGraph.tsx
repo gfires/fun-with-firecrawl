@@ -2,10 +2,11 @@
 
 const NODES = [
   { id: "decompose", x: 80, y: 90, label: "Decompose" },
-  { id: "retrieve", x: 240, y: 90, label: "Retrieve" },
-  { id: "debate", x: 400, y: 90, label: "Debate" },
-  { id: "gate", x: 560, y: 90, label: "Gate" },
-  { id: "recommend", x: 720, y: 90, label: "Recommend" },
+  { id: "retrieve", x: 220, y: 90, label: "Retrieve" },
+  { id: "debate", x: 360, y: 90, label: "Debate" },
+  { id: "gate", x: 500, y: 90, label: "Gate" },
+  { id: "refine", x: 640, y: 90, label: "Refine" },
+  { id: "recommend", x: 780, y: 90, label: "Recommend" },
 ];
 
 const NODE_W = 110;
@@ -27,7 +28,7 @@ function nodeClass(id: string, active: string | null, completed: string[]): stri
 export function PipelineGraph({ activeNode, completedNodes, loopIteration, continueLoop }: Props) {
   return (
     <div className="panel overflow-x-auto p-4">
-      <svg viewBox="0 0 800 140" className="mx-auto w-full max-w-3xl" preserveAspectRatio="xMidYMid meet">
+      <svg viewBox="0 0 860 140" className="mx-auto w-full max-w-4xl" preserveAspectRatio="xMidYMid meet">
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
             <path d="M0,0 L8,3 L0,6" fill="currentColor" className="text-line" />
@@ -44,9 +45,10 @@ export function PipelineGraph({ activeNode, completedNodes, loopIteration, conti
           </filter>
         </defs>
 
-        {/* Edges between nodes */}
+        {/* Edges between nodes (skip refine→recommend — refine loops back to retrieve) */}
         {NODES.slice(0, -1).map((node, i) => {
           const next = NODES[i + 1];
+          if (node.id === "refine") return null;
           const isActive = activeNode === next.id;
           return (
             <line
@@ -62,9 +64,9 @@ export function PipelineGraph({ activeNode, completedNodes, loopIteration, conti
           );
         })}
 
-        {/* Loop arc: gate → retrieve */}
+        {/* Loop arc: refine → retrieve */}
         <path
-          d="M 560,72 C 560,20 240,20 240,72"
+          d="M 640,72 C 640,20 220,20 220,72"
           fill="none"
           stroke={continueLoop && loopIteration > 0 ? "#2dd4bf" : "#1c2634"}
           strokeWidth={continueLoop && loopIteration > 0 ? 2 : 1.5}
@@ -76,8 +78,8 @@ export function PipelineGraph({ activeNode, completedNodes, loopIteration, conti
         {/* Loop iteration badge */}
         {loopIteration > 0 && (
           <g>
-            <rect x="385" y="8" width="30" height="18" rx="4" fill="#0b0f16" stroke="#1c2634" />
-            <text x="400" y="21" textAnchor="middle" fill="#2dd4bf" fontSize="11" fontFamily="var(--font-mono)">
+            <rect x="415" y="8" width="30" height="18" rx="4" fill="#0b0f16" stroke="#1c2634" />
+            <text x="430" y="21" textAnchor="middle" fill="#2dd4bf" fontSize="11" fontFamily="var(--font-mono)">
               L{loopIteration}
             </text>
           </g>

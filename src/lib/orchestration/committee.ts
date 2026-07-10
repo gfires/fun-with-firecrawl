@@ -139,9 +139,9 @@ function formatEvidence(evidence: Evidence[]): string {
   return evidence
     .map(
       (e) =>
-        `[${e.id}] ${e.title}\n  url: ${e.url}\n  snippet: ${e.snippet}`,
+        `[${e.id}] ${e.title}\n  url: ${e.url}\n  snippet: ${e.snippet}\n\n${e.content}`,
     )
-    .join("\n\n");
+    .join("\n\n---\n\n");
 }
 
 /** Build the per-role user prompt: the question, the calibration rules, and the citable evidence. */

@@ -34,8 +34,9 @@ export const MAX_QUESTIONS         = 5;
 // -- Orchestration: retrieve -------------------------------------------------
 
 export const RESULTS_PER_QUESTION  = 6;
+export const SEARCH_CANDIDATES_PER_QUESTION = 10;
 
 // -- Orchestration: gate / budget --------------------------------------------
 
-export const MAX_LOOP_ITERATIONS   = 2;
+export const MAX_LOOP_ITERATIONS   = 5;
 export const TOTAL_FIRECRAWL_BUDGET = 32;

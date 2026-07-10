@@ -85,3 +85,8 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+## Design principles
+
+- **Enforce in code, not prompts.** If a constraint can be checked or clamped programmatically, do it — don't rely on the LLM obeying a prompt instruction. Prompts are hints; code is guarantees. Examples: budget caps, enum membership, ID validation, range clamping.
+- **No vibe floats.** Don't ask LLMs to produce made-up 0-1 scores (confidence, tractability, sensitivity) and then do math on them. The numbers look precise but are arbitrary. Prefer binary/categorical decisions from the LLM and compute quantitative signals from real data (gap counts, confidence spreads, evidence counts).

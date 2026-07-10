@@ -10,6 +10,7 @@ export interface Question {
   category: string;         // e.g. "market structure", "willingness to pay"
   confidence: number;        // running confidence 0-1, updated each loop
   resolved: boolean;
+  searchQueries?: string[];  // refined queries from missingEvidence; falls back to text
 }
 
 export const ResearchState = Annotation.Root({

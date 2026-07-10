@@ -119,10 +119,32 @@ export async function runGraphStreaming(
 
           if (continueLoop) {
             currentLoopIteration = loopIteration;
+            seenNodes.delete("refine");
             seenNodes.delete("retrieve");
             seenNodes.delete("debate");
             seenNodes.delete("gate");
           }
+          break;
+        }
+
+        case "refine": {
+          const questions = (output.questions ?? []) as Question[];
+          const usages = (output.llmCalls ?? []) as AnnotatedUsage[];
+          allLlmCalls.push(...usages);
+
+          for (const u of usages) {
+            send({ type: "research:usage", usage: u });
+          }
+
+          const refinedQueries = questions
+            .filter(q => q.searchQueries && q.searchQueries.length > 0)
+            .map(q => ({ questionId: q.id, queries: q.searchQueries! }));
+
+          send({
+            type: "refine:done",
+            loopIteration: currentLoopIteration,
+            refinedQueries,
+          });
           break;
         }
 
@@ -175,6 +197,12 @@ function sendBeginEvent(
     case "gate":
       send({ type: "gate:begin", loopIteration });
       break;
+    case "refine": {
+      const questions = (output.questions ?? []) as Question[];
+      const questionIds = questions.filter(q => !q.resolved).map(q => q.id);
+      send({ type: "refine:begin", loopIteration, questionIds });
+      break;
+    }
     case "recommend":
       send({ type: "recommend:begin" });
       break;

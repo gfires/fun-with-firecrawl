@@ -110,18 +110,24 @@ const unresolved = (state: ResearchStateT): Question[] =>
 async function retrieve(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
   const questions = unresolved(state);
   if (questions.length === 0) return {};
-  const evidence: Evidence[] = await search(
-    questions.map((q) => q.text),
+  let queries = questions.flatMap((q) =>
+    q.searchQueries && q.searchQueries.length > 0 ? q.searchQueries : [q.text],
+  );
+  // Each search query costs ~2 credits; cap so search alone doesn't blow the budget.
+  const maxQueries = Math.max(1, Math.floor(state.budgetRemaining / 4));
+  if (queries.length > maxQueries) queries = queries.slice(0, maxQueries);
+  const { evidence, searchCredits, scrapeCredits } = await search(
+    queries,
     RESULTS_PER_QUESTION,
     state.loopIteration,
   );
-  const calls = questions.length;
+  const totalCredits = searchCredits + scrapeCredits;
   return {
     evidence,
-    firecrawlCalls: calls,
-    firecrawlCredits: evidence.length,
-    budgetRemaining: state.budgetRemaining - calls,
-    budgetSpent: state.budgetSpent + calls,
+    firecrawlCalls: queries.length,
+    firecrawlCredits: totalCredits,
+    budgetRemaining: state.budgetRemaining - totalCredits,
+    budgetSpent: state.budgetSpent + totalCredits,
   };
 }
 
@@ -170,12 +176,73 @@ async function gate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
 }
 
 /**
- * Conditional edge after `gate`: loop back to `retrieve` while the gate wants to
- * continue (continueLoop === !converged) AND budget remains; otherwise finish.
+ * Conditional edge after `gate`: loop back to `refine` (which generates new queries
+ * from missingEvidence before re-retrieving) while the gate wants to continue and
+ * budget remains; otherwise finish.
  */
-function routeAfterGate(state: ResearchStateT): "retrieve" | "recommend" {
+function routeAfterGate(state: ResearchStateT): "refine" | "recommend" {
   const continueLoop = !state.converged;
-  return continueLoop && state.budgetRemaining > 0 ? "retrieve" : "recommend";
+  return continueLoop && state.budgetRemaining > 0 ? "refine" : "recommend";
+}
+
+// ---------------------------------------------------------------------------
+// refine — generate targeted queries from missingEvidence before re-retrieving
+// ---------------------------------------------------------------------------
+
+const RefineSchema = z.object({
+  questions: z.array(z.object({
+    questionId: z.string(),
+    searchQueries: z.array(z.string()).min(1).max(3),
+  })),
+});
+
+async function refine(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
+  const open = unresolved(state);
+  if (open.length === 0) return {};
+
+  const latestLoop = state.loopIteration;
+  const sections = open.map((q) => {
+    const claims = state.claims.filter(
+      (c) => c.questionId === q.id && c.loopIteration === latestLoop,
+    );
+    const gaps = claims.flatMap((c) => c.missingEvidence).filter(Boolean);
+    const gapText = gaps.length > 0 ? gaps.join("; ") : "";
+    return { id: q.id, text: q.text, gaps, gapText };
+  });
+
+  const hasAnyGaps = sections.some((s) => s.gaps.length > 0);
+  if (!hasAnyGaps) return {};
+
+  const sectionText = sections.map(
+    (s) => `Question ${s.id}: ${s.text}\n  Evidence gaps: ${s.gapText || "none noted — generate diverse queries"}`,
+  );
+
+  const { object, usage } = await generateObject({
+    model: managerModel,
+    schema: RefineSchema,
+    prompt: [
+      "You are a research manager refining search queries for a second pass.",
+      "The committee has reviewed initial evidence and identified gaps.",
+      "For each question below, generate 1–3 NEW, targeted search queries that",
+      "specifically address the noted evidence gaps. Do NOT repeat the original",
+      "question verbatim — instead craft queries that will surface the missing",
+      "information (specific data, counterexamples, named sources, etc.).",
+      "",
+      ...sectionText,
+      "",
+      "Return a searchQueries array for every question ID listed.",
+    ].join("\n"),
+  });
+
+  const queryMap = new Map(object.questions.map((q) => [q.questionId, q.searchQueries]));
+  const questions = state.questions.map((q) =>
+    queryMap.has(q.id) ? { ...q, searchQueries: queryMap.get(q.id)! } : q,
+  );
+
+  return {
+    questions,
+    llmCalls: [toAnnotatedUsage(usage, managerModel.modelId, "refine")],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -259,15 +326,17 @@ const workflow = new StateGraph(ResearchState)
   .addNode("retrieve", retrieve)
   .addNode("debate", debate)
   .addNode("gate", gate)
+  .addNode("refine", refine)
   .addNode("recommend", recommend)
   .addEdge(START, "decompose")
   .addEdge("decompose", "retrieve")
   .addEdge("retrieve", "debate")
   .addEdge("debate", "gate")
   .addConditionalEdges("gate", routeAfterGate, {
-    retrieve: "retrieve",
+    refine: "refine",
     recommend: "recommend",
   })
+  .addEdge("refine", "retrieve")
   .addEdge("recommend", END);
 
 /**
