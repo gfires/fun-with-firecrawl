@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { z } from "zod";
 import { gateClassifierModel } from "../models/provider";
 import type { ResearchStateT } from "../schemas/state";
@@ -67,9 +67,9 @@ Return a decision for every question ID listed above.`;
   const costTracker = getActiveCostTracker();
   costTracker?.check();
 
-  const { object, usage } = await generateObject({
+  const { output: object, usage } = await generateText({
     model: gateClassifierModel,
-    schema: GateDecisionSchema,
+    output: Output.object({ schema: GateDecisionSchema }),
     prompt,
   });
 

@@ -23,7 +23,7 @@
  * signatures consumed here are the integration contract; see their imports below.
  */
 import { StateGraph, MemorySaver, START, END, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { z } from "zod";
 
 import { ResearchState, type ResearchStateT, type Question } from "../schemas/state";
@@ -79,9 +79,9 @@ async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>
     "different facet (market, customers, competition, economics, risks, etc.).",
   ].join("\n");
 
-  const { object, usage } = await generateObject({
+  const { output: object, usage } = await generateText({
     model: managerModel,
-    schema: DecompositionSchema,
+    output: Output.object({ schema: DecompositionSchema }),
     prompt,
   });
 
@@ -260,9 +260,9 @@ async function refine(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
     "Return a searchQueries array for every question ID listed.",
   ].join("\n");
 
-  const { object, usage } = await generateObject({
+  const { output: object, usage } = await generateText({
     model: managerModel,
-    schema: RefineSchema,
+    output: Output.object({ schema: RefineSchema }),
     prompt: refinePrompt,
   });
 

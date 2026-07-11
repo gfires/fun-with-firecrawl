@@ -16,7 +16,7 @@
  * The skeptic deliberately runs on a different model family (see models/provider.ts) so the
  * adversarial check is not just a re-prompt of the same weights.
  */
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { ClaimOutputSchema, type Claim, type AgentRoleT } from "../schemas/claim";
 import type { Evidence } from "../schemas/evidence";
 import type { Question } from "../schemas/state";
@@ -190,9 +190,9 @@ export async function runCommittee(
       const model = modelForRole(role);
       const system = ROLE_SYSTEM_PROMPTS[role];
       const prompt = buildUserPrompt(question, evidence);
-      const { object, usage } = await generateObject({
+      const { output: object, usage } = await generateText({
         model,
-        schema: ClaimOutputSchema,
+        output: Output.object({ schema: ClaimOutputSchema }),
         system,
         prompt,
       });

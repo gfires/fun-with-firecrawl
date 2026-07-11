@@ -36,7 +36,7 @@ export function estimateCostUsd(usage: TokenUsage): number {
 export type AnnotatedUsage = TokenUsage & { label: string; costUsd: number };
 
 /**
- * Build an AnnotatedUsage from a Vercel AI SDK `generateObject` result's `usage` field
+ * Build an AnnotatedUsage from a Vercel AI SDK `generateText` result's `usage` field
  * (`inputTokens`/`outputTokens`, both possibly undefined for providers that omit them).
  * Every graph/committee/gate call site should route its usage through this so cost
  * estimation stays in one place.

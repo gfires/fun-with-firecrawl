@@ -17,7 +17,7 @@ export class BudgetExceededError extends Error {
  * we never estimate a call's cost before it runs. `check()` gates a call by asking
  * "have we already spent the cap?"; `record()` books the exact cost on completion.
  *
- * CONCURRENCY: the graph fans out up to ~20 `generateObject` calls at once (the
+ * CONCURRENCY: the graph fans out up to ~20 structured-output LLM calls at once (the
  * committee runs 4 roles × N questions in parallel). `record()` is a plain synchronous
  * `+=`, and JS is single-threaded, so the increments themselves cannot corrupt each
  * other — no mutex needed. The only imprecision is that a whole fan-out wave can pass
