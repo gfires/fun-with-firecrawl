@@ -4,7 +4,8 @@ import { useState, useEffect, useRef } from "react";
 import type { ResearchUIState } from "@/lib/useResearchStream";
 import { PipelineGraph } from "./PipelineGraph";
 import { QuestionTracker } from "./QuestionTracker";
-import { AgentPanel } from "./AgentPanel";
+import { DebateArena } from "./DebateArena";
+import { AgentSwimlane } from "./AgentSwimlane";
 import { EvidenceFeed } from "./EvidenceFeed";
 import { GateDecisionPanel } from "./GateDecisionPanel";
 import { CostCounter } from "./CostCounter";
@@ -39,6 +40,7 @@ interface Props {
 
 export function ResearchProgress({ state, done = false }: Props) {
   const elapsed = useElapsed(state.running, state.topic);
+  const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const traceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -88,11 +90,18 @@ export function ResearchProgress({ state, done = false }: Props) {
         <EvidenceFeed evidence={state.evidence} loopIteration={state.loopIteration} />
       </div>
 
-      {/* Agent panel */}
-      <AgentPanel
-        claims={state.claims}
+      {/* Debate Arena + Swimlane */}
+      <DebateArena
         claimsByQuestion={state.claimsByQuestion}
+        evidenceByQuestion={state.evidenceByQuestion}
         questions={state.questions}
+        activeNode={state.activeNode}
+        activeQuestionId={activeQuestionId}
+        onSelectQuestion={setActiveQuestionId}
+      />
+      <AgentSwimlane
+        claimsByQuestion={state.claimsByQuestion}
+        activeQuestionId={activeQuestionId ?? Object.keys(state.claimsByQuestion).pop() ?? null}
         activeNode={state.activeNode}
       />
 
