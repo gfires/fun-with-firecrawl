@@ -59,8 +59,7 @@ const DecompositionSchema = z.object({
           .describe('theme, e.g. "market structure" or "willingness to pay"'),
       }),
     )
-    .min(MIN_QUESTIONS)
-    .max(MAX_QUESTIONS),
+    .describe(`between ${MIN_QUESTIONS} and ${MAX_QUESTIONS} questions`),
 });
 
 /**
@@ -94,7 +93,9 @@ async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>
     trace.logLlmCall("decompose", { model: managerModel.modelId, prompt }, object, usage);
   }
 
-  const questions: Question[] = object.questions.map((q, i) => ({
+  // Schema count bounds are advisory only (providers strip min/max) — clamp here
+  // so retrieval fan-out and budget stay bounded.
+  const questions: Question[] = object.questions.slice(0, MAX_QUESTIONS).map((q, i) => ({
     id: `q${i + 1}`,
     text: q.text,
     category: q.category,
@@ -211,7 +212,7 @@ function routeAfterGate(state: ResearchStateT): "refine" | "recommend" {
 const RefineSchema = z.object({
   questions: z.array(z.object({
     questionId: z.string(),
-    searchQueries: z.array(z.string()).min(1).max(3),
+    searchQueries: z.array(z.string()).describe("1-3 targeted search queries"),
   })),
 });
 
@@ -266,7 +267,12 @@ async function refine(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
     trace.logLlmCall("refine", { model: managerModel.modelId, prompt: refinePrompt }, object, usage);
   }
 
-  const queryMap = new Map(object.questions.map((q) => [q.questionId, q.searchQueries]));
+  // Clamp query count in code — each query is a Firecrawl search, so this bounds spend.
+  const queryMap = new Map(
+    object.questions
+      .filter((q) => q.searchQueries.length > 0)
+      .map((q) => [q.questionId, q.searchQueries.slice(0, 3)]),
+  );
   const questions = state.questions.map((q) =>
     queryMap.has(q.id) ? { ...q, searchQueries: queryMap.get(q.id)! } : q,
   );

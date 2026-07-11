@@ -207,6 +207,10 @@ export async function runCommittee(
 
       const claim: Claim = {
         ...object,
+        // Schema no longer hard-caps these (providers don't enforce them);
+        // clamp here so downstream math and the gate see bounded values.
+        confidence: Math.max(0, Math.min(1, object.confidence)),
+        missingEvidence: object.missingEvidence.slice(0, 3),
         id: `${question.id}:${role}:${loopIteration}`,
         questionId: question.id,
         agentRole: role,
