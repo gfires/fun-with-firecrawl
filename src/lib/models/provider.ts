@@ -1,17 +1,21 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import type { AgentRoleT } from "../schemas/claim";
+import { ROLE_MODEL_IDS, REDEBATE_ROLE_MODEL_IDS } from "../params";
 
-// Your explicit model mix decision, in one place
-const ROLE_MODEL: Record<AgentRoleT, ReturnType<typeof anthropic> | ReturnType<typeof openai>> = {
-  historian: anthropic("claude-sonnet-5"),
-  operator: anthropic("claude-sonnet-5"),
-  investor: anthropic("claude-sonnet-5"),
-  skeptic: openai("gpt-4o"),   // deliberately different family — genuine adversarial check
-};
+/** Resolve a model id string to its SDK model instance (OpenAI for gpt-*, else Anthropic). */
+function modelFromId(id: string) {
+  return id.startsWith("gpt") ? openai(id) : anthropic(id);
+}
 
-export function modelForRole(role: AgentRoleT) {
-  return ROLE_MODEL[role];
+/**
+ * The model for a committee role. Loop 0 uses the full mix (ROLE_MODEL_IDS); re-debates
+ * (loopIteration > 0) use REDEBATE_ROLE_MODEL_IDS — Haiku for the three analytical roles,
+ * gpt-4o for the skeptic. Both maps live in params.ts.
+ */
+export function modelForRole(role: AgentRoleT, loopIteration = 0) {
+  const ids = loopIteration > 0 ? REDEBATE_ROLE_MODEL_IDS : ROLE_MODEL_IDS;
+  return modelFromId(ids[role]);
 }
 
 export const managerModel = anthropic("claude-haiku-4-5-20251001");

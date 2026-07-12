@@ -2,7 +2,7 @@ import { generateText, Output } from "ai";
 import { z } from "zod";
 import { gateClassifierModel } from "../models/provider";
 import type { ResearchStateT } from "../schemas/state";
-import { MAX_LOOP_ITERATIONS } from "../params";
+import { MAX_LOOP_ITERATIONS, LLM_MAX_RETRIES } from "../params";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import type { GateScore } from "../research-events";
 import { getActiveTrace } from "./trace";
@@ -94,6 +94,7 @@ Return a decision for every question ID listed above.`;
     model: gateClassifierModel,
     output: Output.object({ schema: GateDecisionSchema }),
     prompt,
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   const annotated = toAnnotatedUsage(usage, gateClassifierModel.modelId, "gate");

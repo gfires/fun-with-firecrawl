@@ -18,7 +18,7 @@ import type { Question } from "../schemas/state";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
-import { MAX_DIGEST_SUMMARY_CHARS } from "../params";
+import { MAX_DIGEST_SUMMARY_CHARS, LLM_MAX_RETRIES } from "../params";
 
 /** One compressed source: the evidence id it summarizes and the summary text. */
 export interface DigestItem {
@@ -121,6 +121,7 @@ export async function digestEvidence(
       model: digestModel,
       output: Output.object({ schema: DigestOutputSchema }),
       prompt,
+      maxRetries: LLM_MAX_RETRIES,
     });
 
     const annotated = toAnnotatedUsage(usage, digestModel.modelId, `digest:${question.id}`);

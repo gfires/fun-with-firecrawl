@@ -31,7 +31,7 @@ import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel } from "../models/provider";
 import { type ArmResult, type AnnotatedUsage, toAnnotatedUsage, rollupTokens } from "./eval";
-import { MIN_QUESTIONS, MAX_QUESTIONS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, DIGEST_ENABLED } from "../params";
+import { MIN_QUESTIONS, MAX_QUESTIONS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
 import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
@@ -160,6 +160,7 @@ async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>
     model: managerModel,
     output: Output.object({ schema: DecompositionSchema }),
     prompt,
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   const annotated = toAnnotatedUsage(usage, managerModel.modelId, "decompose");
@@ -384,6 +385,7 @@ async function refine(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
     model: managerModel,
     output: Output.object({ schema: RefineSchema }),
     prompt: refinePrompt,
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   const annotated = toAnnotatedUsage(usage, managerModel.modelId, "refine");

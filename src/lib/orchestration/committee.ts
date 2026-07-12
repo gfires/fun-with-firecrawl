@@ -24,8 +24,9 @@ import { modelForRole } from "../models/provider";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
-import { MAX_EVIDENCE_CHARS_PER_AGENT, PROMPT_CACHE_MIN_CHARS } from "../params";
+import { MAX_EVIDENCE_CHARS_PER_AGENT, PROMPT_CACHE_MIN_CHARS, LLM_MAX_RETRIES } from "../params";
 import { formatDigestForCommittee, type DigestItem } from "./digest";
+import { limiterForModel } from "./limiter";
 
 /**
  * Calibration rules appended to every role prompt. Kept identical across roles so that a
@@ -271,18 +272,24 @@ export async function runCommittee(
     const costTracker = getActiveCostTracker();
     costTracker?.check();
 
-    const model = modelForRole(role);
+    // Loop 0 uses the full model mix; re-debates drop the Claude roles to Haiku (L4).
+    const model = modelForRole(role, loopIteration);
     // This role's most recent prior claim, if any — drives the incremental re-debate
     // prompt ("update this claim against the new evidence").
     const priorClaim = priorClaims
       .filter((c) => c.agentRole === role)
       .sort((a, b) => b.loopIteration - a.loopIteration)[0];
     const messages = buildCommitteeMessages(role, question, evidenceBlock, loopIteration, priorClaim);
-    const { output: object, usage } = await generateText({
-      model,
-      output: Output.object({ schema: ClaimOutputSchema }),
-      messages,
-    });
+    // Cap concurrency per model (L6) so a committee fan-out can't trip gpt-4o's TPM limit,
+    // and retry transient provider errors.
+    const { output: object, usage } = await limiterForModel(model.modelId)(() =>
+      generateText({
+        model,
+        output: Output.object({ schema: ClaimOutputSchema }),
+        messages,
+        maxRetries: LLM_MAX_RETRIES,
+      }),
+    );
 
     const annotated = toAnnotatedUsage(usage, model.modelId, `committee:${role}`);
     costTracker?.record({ model: model.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
