@@ -16,10 +16,33 @@ const GateDecisionSchema = z.object({
   })),
 });
 
+/**
+ * Zero-LLM-cost convergence checks. Any non-null result means the loop MUST stop before
+ * we pay for a gate classification call. Checked first in allocateBudget.
+ *
+ * - "budget": no Firecrawl budget left to retrieve with.
+ * - "max-loops": the loop-iteration cap is reached.
+ * - "no-progress": a past-loop-0 iteration whose retrieve added no new evidence — running
+ *   the committee and gate again would only reproduce the prior round. Loop 0 is exempt
+ *   (newEvidenceCount is only meaningful once a retrieve has actually run).
+ *
+ * Order matters only for the returned reason string; all three are terminal.
+ */
+export function gateShortCircuit(
+  state: ResearchStateT,
+): "budget" | "max-loops" | "no-progress" | null {
+  if (state.budgetRemaining <= 0) return "budget";
+  if (state.loopIteration >= MAX_LOOP_ITERATIONS) return "max-loops";
+  if (state.loopIteration > 0 && state.newEvidenceCount === 0) return "no-progress";
+  return null;
+}
+
 export async function allocateBudget(
   state: ResearchStateT
 ): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; gateScores: GateScore[] }> {
-  if (state.budgetRemaining <= 0 || state.loopIteration >= MAX_LOOP_ITERATIONS) {
+  // Zero-cost convergence checks first — budget, loop cap, zero-progress loop — so a
+  // converged run never pays for a gate classification call.
+  if (gateShortCircuit(state)) {
     return { state: { ...state, converged: true }, continueLoop: false, usage: [], gateScores: [] };
   }
 

@@ -84,6 +84,30 @@ export function scopeEvidenceToQuestions(
   return byQuestion;
 }
 
+/**
+ * Which unresolved questions actually need the committee re-run this loop. A question
+ * needs debate iff it is unresolved AND either (a) it has no claims yet, or (b) some of
+ * its scoped evidence is fresh this loop (loopIteration === currentLoop). A question that
+ * is already claimed and gained no new evidence this round would only reproduce the same
+ * deliberation, so we skip it — that's the L1 incremental-debate saving. `currentLoop` is
+ * the current loop number (the gate increments it AFTER debate, so fresh evidence carries
+ * exactly this value during debate).
+ */
+export function questionsNeedingDebate(
+  questions: Question[],
+  evidenceByQuestion: Map<string, Evidence[]>,
+  claims: Claim[],
+  currentLoop: number,
+): Question[] {
+  return questions.filter((q) => {
+    if (q.resolved) return false;
+    const hasClaims = claims.some((c) => c.questionId === q.id);
+    if (!hasClaims) return true;
+    const scoped = evidenceByQuestion.get(q.id) ?? [];
+    return scoped.some((e) => e.loopIteration === currentLoop);
+  });
+}
+
 export function queriesToSearch(
   questions: Question[],
   alreadySearched: string[],
@@ -179,9 +203,11 @@ async function retrieve(
   config?: LangGraphRunnableConfig,
 ): Promise<Partial<ResearchStateT>> {
   const questions = unresolved(state);
-  if (questions.length === 0) return {};
+  // Every return path sets newEvidenceCount so the gate can detect a zero-progress
+  // loop: an early return adds no evidence, so the count is 0.
+  if (questions.length === 0) return { newEvidenceCount: 0 };
   let queries = queriesToSearch(questions, state.searchedQueries);
-  if (queries.length === 0) return {};
+  if (queries.length === 0) return { newEvidenceCount: 0 };
   // Each search query costs ~2 credits; cap so search alone doesn't blow the budget.
   const maxQueries = Math.max(1, Math.floor(state.budgetRemaining / 4));
   if (queries.length > maxQueries) queries = queries.slice(0, maxQueries);
@@ -204,6 +230,7 @@ async function retrieve(
     firecrawlCredits: totalCredits,
     budgetRemaining: -totalCredits,
     budgetSpent: totalCredits,
+    newEvidenceCount: evidence.length,
   };
 }
 
@@ -216,11 +243,25 @@ async function retrieve(
  * far, appending the resulting claims. The `claims` reducer is append-only.
  */
 async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
-  const questions = unresolved(state);
   const evidenceByQuestion = scopeEvidenceToQuestions(state.questions, state.evidence);
+  // Only re-run the committee where it can produce something new (L1). If nothing needs
+  // debate, return an empty delta — the gate then short-circuits via newEvidenceCount===0.
+  const questions = questionsNeedingDebate(
+    state.questions,
+    evidenceByQuestion,
+    state.claims,
+    state.loopIteration,
+  );
+  if (questions.length === 0) return {};
 
   const batches = await Promise.all(
-    questions.map((q) => runCommittee(q, evidenceByQuestion.get(q.id) ?? [])),
+    questions.map((q) =>
+      runCommittee(
+        q,
+        evidenceByQuestion.get(q.id) ?? [],
+        state.claims.filter((c) => c.questionId === q.id),
+      ),
+    ),
   );
   const claims: Claim[] = batches.flatMap((b) => b.claims);
   const llmCalls = batches.flatMap((b) => b.usage);

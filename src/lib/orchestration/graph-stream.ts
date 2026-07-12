@@ -1,5 +1,11 @@
 import { GraphRecursionError } from "@langchain/langgraph";
-import { compileResearchGraph, synthesizeReport, computeRecursionLimit } from "./graph";
+import {
+  compileResearchGraph,
+  synthesizeReport,
+  computeRecursionLimit,
+  scopeEvidenceToQuestions,
+  questionsNeedingDebate,
+} from "./graph";
 import { rollupTokens } from "./eval";
 import type { ArmResult } from "./eval";
 import type { ResearchStateT, Question } from "../schemas/state";
@@ -68,6 +74,12 @@ async function runGraphStreamingInner(
   let currentQuestions: Question[] = [];
   let budgetRemaining = initialBudget;
   const unresolvedIds = () => currentQuestions.filter(q => !q.resolved).map(q => q.id);
+  // Accumulated node outputs needed to mirror the graph's incremental-debate decision:
+  // the eager debate:begin must announce only the questions the debate node will actually
+  // run (questionsNeedingDebate), not every unresolved id. Evidence is append-only in the
+  // graph; claims accrue across loops — we mirror both from the "updates" stream.
+  const allEvidence: Evidence[] = [];
+  const allClaims: Claim[] = [];
 
   let degraded = false;
   let degradeMessage = "";
@@ -143,6 +155,7 @@ async function runGraphStreamingInner(
             const credits = (output.firecrawlCredits ?? 0) as number;
             totalFirecrawlCalls += calls;
             totalFirecrawlCredits += credits;
+            allEvidence.push(...evidence);
             // retrieve returns budget DELTAS (additive reducer) — accumulate to
             // mirror state.budgetRemaining for the post-gate routing prediction.
             budgetRemaining += (output.budgetRemaining ?? 0) as number;
@@ -157,8 +170,20 @@ async function runGraphStreamingInner(
               evidenceCount: evidence.length,
               firecrawlCalls: calls,
             });
-            // Next node is deterministic: retrieve → debate.
-            send({ type: "debate:begin", loopIteration: currentLoopIteration, questionIds: unresolvedIds() });
+            // Next node is deterministic: retrieve → debate. Mirror the debate node's
+            // incremental filter so the begin event announces only the questions that
+            // will actually be re-run this loop (see questionsNeedingDebate in graph.ts).
+            const needing = questionsNeedingDebate(
+              currentQuestions,
+              scopeEvidenceToQuestions(currentQuestions, allEvidence),
+              allClaims,
+              currentLoopIteration,
+            );
+            send({
+              type: "debate:begin",
+              loopIteration: currentLoopIteration,
+              questionIds: needing.map(q => q.id),
+            });
             break;
           }
 
@@ -166,6 +191,7 @@ async function runGraphStreamingInner(
             const claims = (output.claims ?? []) as Claim[];
             const usages = (output.llmCalls ?? []) as AnnotatedUsage[];
             allLlmCalls.push(...usages);
+            allClaims.push(...claims);
 
             for (const claim of claims) {
               send({ type: "debate:claim", claim });

@@ -149,17 +149,84 @@ function formatEvidence(evidence: Evidence[]): string {
   return blocks.join("\n\n---\n\n");
 }
 
-/** Build the per-role user prompt: the question, the calibration rules, and the citable evidence. */
-function buildUserPrompt(question: Question, evidence: Evidence[]): string {
+/**
+ * One-line-per-source index of already-seen evidence. On a re-debate we don't re-pay for
+ * the full content of prior-loop sources — we collapse them to `[id] title — url — snippet`
+ * so the ids stay citable while the token cost drops to a fraction of the full text.
+ */
+function formatEvidenceIndex(evidence: Evidence[]): string {
+  if (evidence.length === 0) return "(none)";
+  return evidence.map((e) => `[${e.id}] ${e.title} — ${e.url} — ${e.snippet}`).join("\n");
+}
+
+/**
+ * Partition evidence into what arrived THIS loop (`fresh`) versus earlier loops (`prior`),
+ * keyed on Evidence.loopIteration. `currentLoop` is the loop the committee is debating.
+ * Exported for direct unit testing.
+ */
+export function splitEvidence(
+  evidence: Evidence[],
+  currentLoop: number,
+): { fresh: Evidence[]; prior: Evidence[] } {
+  const fresh: Evidence[] = [];
+  const prior: Evidence[] = [];
+  for (const e of evidence) {
+    (e.loopIteration === currentLoop ? fresh : prior).push(e);
+  }
+  return { fresh, prior };
+}
+
+/**
+ * Build the per-role user prompt.
+ *
+ * Loop 0 (or any role with no prior claim to update): render the full evidence set, as
+ * before — nothing has been seen yet, so everything is fresh context.
+ *
+ * Re-debate (the role has a prior claim): only the FRESH evidence gets full text (still
+ * capped by MAX_EVIDENCE_CHARS_PER_AGENT); prior-loop evidence collapses to a citable
+ * id-index, and the role's own prior claim is shown with an instruction to UPDATE it
+ * against the new evidence. This is the L1 incremental-debate token saving — a re-debate
+ * pays for the delta, not the whole corpus again.
+ */
+export function buildUserPrompt(
+  question: Question,
+  evidence: Evidence[],
+  currentLoop: number,
+  priorClaim?: Claim,
+): string {
+  if (!priorClaim) {
+    return [
+      `QUESTION (${question.category}): ${question.text}`,
+      "",
+      "EVIDENCE — cite only by the bracketed id, e.g. supportingEvidenceIds: [\"<id>\"]:",
+      formatEvidence(evidence),
+      "",
+      CONFIDENCE_CALIBRATION,
+      "",
+      "Render your Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct.",
+      "List up to 3 specific evidence gaps in missingEvidence (each under 100 chars).",
+      "Only fill: conclusion, confidence, supportingEvidenceIds, contradictingEvidenceIds, missingEvidence.",
+    ].join("\n");
+  }
+
+  const { fresh, prior } = splitEvidence(evidence, currentLoop);
   return [
     `QUESTION (${question.category}): ${question.text}`,
     "",
-    "EVIDENCE — cite only by the bracketed id, e.g. supportingEvidenceIds: [\"<id>\"]:",
-    formatEvidence(evidence),
+    "NEW EVIDENCE this round — cite only by the bracketed id:",
+    formatEvidence(fresh),
+    "",
+    "PRIOR EVIDENCE (already seen last round; full text omitted, still cite by id):",
+    formatEvidenceIndex(prior),
+    "",
+    "YOUR PRIOR CLAIM — revise it in light of the new evidence above (do not restate it unchanged):",
+    `  conclusion: ${priorClaim.conclusion}`,
+    `  confidence: ${priorClaim.confidence.toFixed(2)}`,
+    `  missingEvidence: ${priorClaim.missingEvidence.join("; ") || "(none noted)"}`,
     "",
     CONFIDENCE_CALIBRATION,
     "",
-    "Render your Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct.",
+    "Render your UPDATED Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct.",
     "List up to 3 specific evidence gaps in missingEvidence (each under 100 chars).",
     "Only fill: conclusion, confidence, supportingEvidenceIds, contradictingEvidenceIds, missingEvidence.",
   ].join("\n");
@@ -178,6 +245,7 @@ export interface CommitteeResult {
 export async function runCommittee(
   question: Question,
   evidence: Evidence[],
+  priorClaims: Claim[] = [],
 ): Promise<CommitteeResult> {
   // The loop iteration this claim belongs to = the most recent retrieval round it can see.
   const loopIteration = evidence.reduce((max, e) => Math.max(max, e.loopIteration), 0);
@@ -189,7 +257,12 @@ export async function runCommittee(
 
       const model = modelForRole(role);
       const system = ROLE_SYSTEM_PROMPTS[role];
-      const prompt = buildUserPrompt(question, evidence);
+      // This role's most recent prior claim, if any — drives the incremental re-debate
+      // prompt (full fresh evidence + prior-evidence index + "update this claim").
+      const priorClaim = priorClaims
+        .filter((c) => c.agentRole === role)
+        .sort((a, b) => b.loopIteration - a.loopIteration)[0];
+      const prompt = buildUserPrompt(question, evidence, loopIteration, priorClaim);
       const { output: object, usage } = await generateText({
         model,
         output: Output.object({ schema: ClaimOutputSchema }),
