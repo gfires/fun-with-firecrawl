@@ -16,7 +16,7 @@
  * The skeptic deliberately runs on a different model family (see models/provider.ts) so the
  * adversarial check is not just a re-prompt of the same weights.
  */
-import { generateText, Output } from "ai";
+import { generateText, Output, type ModelMessage } from "ai";
 import { ClaimOutputSchema, type Claim, type AgentRoleT } from "../schemas/claim";
 import type { Evidence } from "../schemas/evidence";
 import type { Question } from "../schemas/state";
@@ -24,7 +24,7 @@ import { modelForRole } from "../models/provider";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
-import { MAX_EVIDENCE_CHARS_PER_AGENT } from "../params";
+import { MAX_EVIDENCE_CHARS_PER_AGENT, PROMPT_CACHE_MIN_CHARS } from "../params";
 import { formatDigestForCommittee, type DigestItem } from "./digest";
 
 /**
@@ -169,16 +169,49 @@ export function splitEvidence(
 }
 
 /**
- * Build the per-role user prompt around a pre-built evidence block (a digest when one is
- * available, else raw evidence — the caller decides). On a re-debate the role also gets
- * its own prior claim with an instruction to UPDATE it against the evidence rather than
- * restate it unchanged. Exported for direct unit testing.
+ * Build the AI-SDK messages for one committee role, structured for Anthropic prompt-cache
+ * hits (L3).
+ *
+ * The `system` message is a shared prefix — question + evidence/digest block + the
+ * confidence calibration — that is BYTE-IDENTICAL across the three Claude roles (nothing
+ * role-specific leaks in), so Anthropic serves it from cache after the first role writes it.
+ * The role persona and the task instructions (and, on a re-debate, the role's own prior
+ * claim) live in the `user` message, where they vary per role without disturbing the cache.
+ *
+ * cacheControl is attached only above PROMPT_CACHE_MIN_CHARS (a tiny prefix isn't worth
+ * caching) and only for the Claude roles — the skeptic runs on OpenAI and gets no anthropic
+ * providerOptions. `currentLoop` is part of the signature for callers that key cache reuse
+ * on the loop; the prompt text itself doesn't branch on it.
  */
-export function buildUserPrompt(
+export function buildCommitteeMessages(
+  role: AgentRoleT,
   question: Question,
   evidenceBlock: string,
+  currentLoop: number,
   priorClaim?: Claim,
-): string {
+): ModelMessage[] {
+  void currentLoop; // reserved: reuse is keyed on prefix identity, not the loop number
+
+  const systemPrefix = [
+    `QUESTION (${question.category}): ${question.text}`,
+    "",
+    "EVIDENCE — cite only by the bracketed id, e.g. supportingEvidenceIds: [\"<id>\"]:",
+    evidenceBlock,
+    "",
+    CONFIDENCE_CALIBRATION,
+  ].join("\n");
+
+  // Cache the shared prefix for the Claude roles once it's big enough to be worth it.
+  // The skeptic (OpenAI) never carries anthropic providerOptions.
+  const cacheable = role !== "skeptic" && systemPrefix.length > PROMPT_CACHE_MIN_CHARS;
+  const system: ModelMessage = {
+    role: "system",
+    content: systemPrefix,
+    ...(cacheable
+      ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }
+      : {}),
+  };
+
   const priorClaimBlock = priorClaim
     ? [
         "YOUR PRIOR CLAIM — revise it in light of the evidence above (do not restate it unchanged):",
@@ -189,21 +222,19 @@ export function buildUserPrompt(
       ]
     : [];
 
-  return [
-    `QUESTION (${question.category}): ${question.text}`,
-    "",
-    "EVIDENCE — cite only by the bracketed id, e.g. supportingEvidenceIds: [\"<id>\"]:",
-    evidenceBlock,
+  const userContent = [
+    ROLE_SYSTEM_PROMPTS[role],
     "",
     ...priorClaimBlock,
-    CONFIDENCE_CALIBRATION,
-    "",
     priorClaim
       ? "Render your UPDATED Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct."
       : "Render your Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct.",
     "List up to 3 specific evidence gaps in missingEvidence (each under 100 chars).",
     "Only fill: conclusion, confidence, supportingEvidenceIds, contradictingEvidenceIds, missingEvidence.",
   ].join("\n");
+  const user: ModelMessage = { role: "user", content: userContent };
+
+  return [system, user];
 }
 
 /** The four independent role Claims for one question, plus each call's token usage. */
@@ -214,7 +245,12 @@ export interface CommitteeResult {
 
 /**
  * Run the full four-role committee against one question and its relevant evidence.
- * Each role is called in parallel with its own model and produces one calibrated Claim.
+ * Each role produces one calibrated Claim on its own model.
+ *
+ * Execution is STAGGERED for cache hits: the historian runs first and WRITES the shared
+ * system prefix into Anthropic's cache; operator, investor and skeptic then run together,
+ * with the two remaining Claude roles READING that cached prefix. (The skeptic is OpenAI
+ * and unaffected by the cache, but runs in the same second wave.)
  */
 export async function runCommittee(
   question: Question,
@@ -231,49 +267,52 @@ export async function runCommittee(
     ? formatDigestForCommittee(evidence, digestItems)
     : formatEvidence(evidence);
 
-  const results = await Promise.all(
-    ROLES.map(async (role): Promise<{ claim: Claim; usage: AnnotatedUsage }> => {
-      const costTracker = getActiveCostTracker();
-      costTracker?.check();
+  const runRole = async (role: AgentRoleT): Promise<{ claim: Claim; usage: AnnotatedUsage }> => {
+    const costTracker = getActiveCostTracker();
+    costTracker?.check();
 
-      const model = modelForRole(role);
-      const system = ROLE_SYSTEM_PROMPTS[role];
-      // This role's most recent prior claim, if any — drives the incremental re-debate
-      // prompt ("update this claim against the new evidence").
-      const priorClaim = priorClaims
-        .filter((c) => c.agentRole === role)
-        .sort((a, b) => b.loopIteration - a.loopIteration)[0];
-      const prompt = buildUserPrompt(question, evidenceBlock, priorClaim);
-      const { output: object, usage } = await generateText({
-        model,
-        output: Output.object({ schema: ClaimOutputSchema }),
-        system,
-        prompt,
-      });
+    const model = modelForRole(role);
+    // This role's most recent prior claim, if any — drives the incremental re-debate
+    // prompt ("update this claim against the new evidence").
+    const priorClaim = priorClaims
+      .filter((c) => c.agentRole === role)
+      .sort((a, b) => b.loopIteration - a.loopIteration)[0];
+    const messages = buildCommitteeMessages(role, question, evidenceBlock, loopIteration, priorClaim);
+    const { output: object, usage } = await generateText({
+      model,
+      output: Output.object({ schema: ClaimOutputSchema }),
+      messages,
+    });
 
-      const annotated = toAnnotatedUsage(usage, model.modelId, `committee:${role}`);
-      costTracker?.record({ model: model.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+    const annotated = toAnnotatedUsage(usage, model.modelId, `committee:${role}`);
+    costTracker?.record({ model: model.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
 
-      const trace = getActiveTrace();
-      if (trace) {
-        trace.logLlmCall(`committee:${role}`, { model: model.modelId, prompt, system }, object, usage);
-      }
+    const trace = getActiveTrace();
+    if (trace) {
+      trace.logLlmCall(`committee:${role}`, { model: model.modelId, prompt: messages }, object, usage);
+    }
 
-      const claim: Claim = {
-        ...object,
-        // Schema no longer hard-caps these (providers don't enforce them);
-        // clamp here so downstream math and the gate see bounded values.
-        confidence: Math.max(0, Math.min(1, object.confidence)),
-        missingEvidence: object.missingEvidence.slice(0, 3),
-        id: `${question.id}:${role}:${loopIteration}`,
-        questionId: question.id,
-        agentRole: role,
-        loopIteration,
-      };
+    const claim: Claim = {
+      ...object,
+      // Schema no longer hard-caps these (providers don't enforce them);
+      // clamp here so downstream math and the gate see bounded values.
+      confidence: Math.max(0, Math.min(1, object.confidence)),
+      missingEvidence: object.missingEvidence.slice(0, 3),
+      id: `${question.id}:${role}:${loopIteration}`,
+      questionId: question.id,
+      agentRole: role,
+      loopIteration,
+    };
 
-      return { claim, usage: annotated };
-    }),
+    return { claim, usage: annotated };
+  };
+
+  // Historian first (cache write), then the rest in parallel (cache read for the Claude roles).
+  const historian = await runRole("historian");
+  const rest = await Promise.all(
+    ROLES.filter((r) => r !== "historian").map(runRole),
   );
+  const results = [historian, ...rest];
 
   return { claims: results.map((r) => r.claim), usage: results.map((r) => r.usage) };
 }

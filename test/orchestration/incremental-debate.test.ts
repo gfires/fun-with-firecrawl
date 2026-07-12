@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { questionsNeedingDebate } from "@/lib/orchestration/graph";
-import { splitEvidence, buildUserPrompt } from "@/lib/orchestration/committee";
+import { splitEvidence } from "@/lib/orchestration/committee";
 import type { Question } from "@/lib/schemas/state";
 import type { Evidence } from "@/lib/schemas/evidence";
 import type { Claim } from "@/lib/schemas/claim";
@@ -91,32 +91,5 @@ describe("splitEvidence", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// buildUserPrompt
-// ---------------------------------------------------------------------------
-
-describe("buildUserPrompt", () => {
-  const BLOCK = "[e-1] Title (example.com)\n  digest summary line";
-
-  it("no prior claim: passes the evidence block through, no prior-claim block", () => {
-    const prompt = buildUserPrompt(q("q1"), BLOCK);
-    expect(prompt).toContain("EVIDENCE — cite only by the bracketed id");
-    expect(prompt).toContain(BLOCK);
-    expect(prompt).toContain("Render your Claim now");
-    expect(prompt).not.toContain("YOUR PRIOR CLAIM");
-    expect(prompt).not.toContain("UPDATED Claim");
-  });
-
-  it("re-debate: keeps the evidence block and adds the role's prior claim to update", () => {
-    const prior = claim("q1", { loopIteration: 0 });
-    const prompt = buildUserPrompt(q("q1"), BLOCK, prior);
-
-    expect(prompt).toContain(BLOCK);
-    // Prior-claim block with the instruction to update it, not restate it.
-    expect(prompt).toContain("YOUR PRIOR CLAIM");
-    expect(prompt).toContain("prior conclusion text");
-    expect(prompt).toContain("0.42");
-    expect(prompt).toContain("need pricing data");
-    expect(prompt).toContain("Render your UPDATED Claim now");
-  });
-});
+// buildUserPrompt was superseded by buildCommitteeMessages in Phase 4b — its prior-claim
+// and evidence-block behavior is now covered in committee-messages.test.ts.

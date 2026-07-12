@@ -52,3 +52,8 @@ export const MAX_CONCLUSION_CHARS    = 400;
 // instead of full page content. DIGEST_ENABLED=false falls back to raw evidence.
 export const DIGEST_ENABLED          = true;
 export const MAX_DIGEST_SUMMARY_CHARS = 400;
+
+// Committee cache-hit restructure (L3): the 3 Claude roles share a byte-identical system
+// prefix so Anthropic can serve it from its prompt cache. cacheControl is only worth
+// attaching when the prefix is large enough to matter — below this many chars, skip it.
+export const PROMPT_CACHE_MIN_CHARS  = 4500;

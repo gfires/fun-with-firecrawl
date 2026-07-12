@@ -31,7 +31,7 @@ export class TraceLogger {
     this.log(`sse:${event.type}`, event);
   }
 
-  logLlmCall(label: string, request: { model: string; prompt: string; system?: string; schema?: unknown }, response: unknown, usage: unknown): void {
+  logLlmCall(label: string, request: { model: string; prompt: unknown; system?: string; schema?: unknown }, response: unknown, usage: unknown): void {
     this.log("llm:call", { label, request, response, usage });
   }
 
