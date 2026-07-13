@@ -27,6 +27,7 @@ import { getActiveCostTracker } from "./cost-tracker";
 import { MAX_EVIDENCE_CHARS_PER_AGENT, PROMPT_CACHE_MIN_CHARS, LLM_MAX_RETRIES } from "../params";
 import { formatDigestForCommittee, type DigestItem } from "./digest";
 import { limiterForModel } from "./limiter";
+import { renderTranscript, type DebateRound } from "./debate";
 
 /**
  * Calibration rules appended to every role prompt. Kept identical across roles so that a
@@ -243,6 +244,96 @@ export function buildCommitteeMessages(
       : "Render your Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct.",
     "List up to 3 specific evidence gaps in missingEvidence (each under 100 chars).",
     "Only fill: conclusion, confidence, supportingEvidenceIds, contradictingEvidenceIds, missingEvidence.",
+  ].join("\n");
+  const user: ModelMessage = { role: "user", content: userContent };
+
+  return [system, user];
+}
+
+/**
+ * Build the AI-SDK messages for one role's CONVERSATIONAL turn (debate round ≥1), structured to
+ * preserve the L3 prompt cache exactly as the opening round does.
+ *
+ * The `system` message is the shared prefix — question + evidence/digest block + the rendered
+ * transcript of all PRIOR rounds + the confidence calibration — BYTE-IDENTICAL across the three
+ * Claude roles. The transcript is deterministic and role-independent (see renderTranscript), so it
+ * doesn't break the shared prefix; the per-role material (the challenges aimed at this role, this
+ * role's own prior turn, and the task) all lives in the `user` message. cacheControl is attached
+ * only above PROMPT_CACHE_MIN_CHARS and never for the skeptic (OpenAI).
+ *
+ * `transcript` is every round rendered so far; its LAST round supplies the challenges this role must
+ * answer. `priorTurn` is this role's most recent claim, which it is revising.
+ */
+export function buildDebateMessages(
+  role: AgentRoleT,
+  question: Question,
+  evidenceBlock: string,
+  transcript: DebateRound[],
+  priorTurn: Claim | undefined,
+  currentLoop: number,
+): ModelMessage[] {
+  void currentLoop; // reserved: reuse is keyed on prefix identity, not the loop number
+
+  const systemPrefix = [
+    `QUESTION (${question.category}): ${question.text}`,
+    "",
+    "EVIDENCE — cite only by the bracketed id, e.g. supportingEvidenceIds: [\"<id>\"]:",
+    evidenceBlock,
+    "",
+    "DEBATE SO FAR (all prior rounds):",
+    renderTranscript(transcript),
+    "",
+    CONFIDENCE_CALIBRATION,
+  ].join("\n");
+
+  const cacheable = role !== "skeptic" && systemPrefix.length > PROMPT_CACHE_MIN_CHARS;
+  const system: ModelMessage = {
+    role: "system",
+    content: systemPrefix,
+    ...(cacheable
+      ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }
+      : {}),
+  };
+
+  // Challenges aimed at THIS role, in the latest round. Walk the round's claims (each claim's
+  // agentRole is the challenger) rather than directedChallenges() so we can label who raised each
+  // point — the same set that helper surfaces, enriched with the source role for the prompt.
+  const latestRound = transcript[transcript.length - 1];
+  const challengeLines = (latestRound?.claims ?? []).flatMap((c) =>
+    c.responses
+      .filter((r) => r.targetRole === role)
+      .map((r) => `[${c.agentRole}] ${r.stance}s your position (${r.stance}): ${r.point}`),
+  );
+  const challengeBlock = challengeLines.length
+    ? ["CHALLENGES AIMED AT YOU — you MUST answer each below:", ...challengeLines, ""]
+    : ["No peer challenged you directly last round — revise only if the evidence itself warrants it.", ""];
+
+  const priorTurnBlock = priorTurn
+    ? [
+        "YOUR PRIOR TURN — revise it in light of the debate above (do not restate it unchanged):",
+        `  conclusion: ${priorTurn.conclusion}`,
+        `  confidence: ${priorTurn.confidence.toFixed(2)}`,
+        `  missingEvidence: ${priorTurn.missingEvidence.join("; ") || "(none noted)"}`,
+        "",
+      ]
+    : [];
+
+  const userContent = [
+    // Same anchor as the opening round: the QUESTION + EVIDENCE + transcript live in the system
+    // message; point the role at them so it never confabulates that nothing was supplied.
+    "The QUESTION, its EVIDENCE, and the debate transcript are in the system message above. Base your",
+    "answer only on that evidence block, cite sources by their exact bracketed id, and never claim",
+    "evidence was missing when the block is non-empty.",
+    "",
+    ROLE_SYSTEM_PROMPTS[role],
+    "",
+    ...challengeBlock,
+    ...priorTurnBlock,
+    "Respond to EACH challenge above: concede (cite the exact evidence id that moves you) or hold (cite",
+    "the id that backs you). You may ONLY concede to evidence, never to consensus — if you move, name the",
+    "id that moved you. Then render your UPDATED Claim (conclusion 2-3 sentences, under 400 chars) and your",
+    "`responses` (one directed reply per peer you engage: rebut / concede / extend, each citing an id).",
+    "List up to 3 specific evidence gaps in missingEvidence (each under 100 chars).",
   ].join("\n");
   const user: ModelMessage = { role: "user", content: userContent };
 
