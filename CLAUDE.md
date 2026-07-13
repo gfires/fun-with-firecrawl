@@ -1,6 +1,6 @@
 # Project Guide
 
-Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions, a committee (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) debates structured claims, and a VOI gate allocates further retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
+Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee of four role-agents (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) each render **one independent** structured claim over the same evidence — they run in parallel and do not see each other's claims, so cross-role agreement is real signal and divergence flags a question worth more retrieval — and a VOI gate allocates further retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
 
 **Current status, changelog, and open issues live in [STATUS.md](STATUS.md).** This file holds stable reference only.
 
@@ -15,10 +15,14 @@ Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl ap
 | `src/lib/evidence/firecrawl.ts` | search() and explore() |
 | `src/lib/evidence/store.ts` | In-memory Evidence store + contentHash |
 | `src/lib/orchestration/graph.ts` | StateGraph + runGraph() + synthesizeReport() |
-| `src/lib/orchestration/committee.ts` | runCommittee() — four-role deliberation |
-| `src/lib/orchestration/gate.ts` | allocateBudget() — VOI scoring with per-question claim summaries |
+| `src/lib/orchestration/committee.ts` | runCommittee() — four role-agents each render one independent Claim over shared evidence |
+| `src/lib/orchestration/digest.ts` | Per-question Haiku evidence digest (L2) — compresses each source to one item before the committee |
+| `src/lib/orchestration/gate.ts` | allocateBudget() — VOI scoring with per-question claim summaries; gateShortCircuit() (budget / max-loops / no-progress) |
+| `src/lib/orchestration/limiter.ts` | createLimiter() — per-model + Firecrawl FIFO concurrency caps |
+| `src/lib/orchestration/cost-tracker.ts` | Per-run USD cost cap via AsyncLocalStorage (runWithCostTracker) |
 | `src/lib/orchestration/eval.ts` | ArmResult types + runBaseline() + toAnnotatedUsage() + rollupTokens() |
-| `src/lib/params.ts` | Orchestration tunables (budget, thresholds, loop limits) |
+| `src/lib/supabase.ts` | Supabase client backing the search/scrape/blocklist caches (`blindspot` schema; see `supabase/schema.sql`) |
+| `src/lib/params.ts` | Orchestration tunables (budget, thresholds, loop limits, digest, prompt-cache, model mix, concurrency) |
 | `scripts/compare-arms.ts` | A/B comparison harness (accepts --budget) |
 | `src/lib/research-events.ts` | ResearchEvent union (SSE wire protocol for orchestration) |
 | `src/lib/orchestration/graph-stream.ts` | runGraphStreaming() — streaming graph runner |
@@ -33,10 +37,13 @@ Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl ap
 ```
 npx tsc --noEmit        # typecheck (should be clean)
 npx vitest run           # tests
+npm run smoke:supabase   # verify the Supabase cache round-trips (live but free)
 npm run compare -- "freight brokerage"              # run both arms
 npx tsx scripts/run-arm.ts orchestrated "freight brokerage"  # single arm
-npx tsx scripts/run-arm.ts baseline "freight brokerage" --budget 20  # with budget override
+npx tsx scripts/run-arm.ts baseline "freight brokerage" --budget=20  # with budget override (use --budget=N, not a space)
 ```
+
+`tsc` + `vitest` are the only zero-cost checks; everything below `smoke:supabase` spends API credits.
 
 ## Skill routing
 
@@ -69,3 +76,4 @@ Key routing rules:
 - **Enforce in code, not prompts.** If a constraint can be checked or clamped programmatically, do it — don't rely on the LLM obeying a prompt instruction. Prompts are hints; code is guarantees. Examples: budget caps, enum membership, ID validation, range clamping.
 - **No hard caps in LLM output schemas.** Never put `.min()`/`.max()` (lengths, counts, numeric ranges) on Zod schemas passed to `generateText`/`Output.object` — providers strip unsupported JSON-schema keywords, so the model never sees the limit, and client-side validation turns a slightly-long response into a run-killing `NoOutputGeneratedError`. Steer with `.describe()` hints; clamp in code after generation where the bound actually matters.
 - **No vibe floats.** Don't ask LLMs to produce made-up 0-1 scores (confidence, tractability, sensitivity) and then do math on them. The numbers look precise but are arbitrary. Prefer binary/categorical decisions from the LLM and compute quantitative signals from real data (gap counts, confidence spreads, evidence counts).
+- - **Disregard dev time.** When evaluating different approaches, don't consider perceived human dev time at all. Look exclusively for the most correct, consistent, concise, and elegant solution.
