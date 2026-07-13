@@ -219,20 +219,42 @@ const DecompositionSchema = z.object({
 });
 
 /**
- * Manager breaks `state.topic` into 3–5 concrete questions. Fresh questions start
- * at zero confidence and unresolved; the `questions` reducer replaces wholesale.
+ * Manager breaks the intake OBJECTIVE into 3–5 concrete questions whose answers would satisfy
+ * it, respecting the stated CONSTRAINTS. This is the seam that makes decomposition adapt to the
+ * input's shape: a survey objective yields broad coverage questions; a go/no-go objective yields
+ * the questions that adjudicate that specific bet. It stays opinionated toward actionable
+ * market/opportunity analysis (the committee's lens) rather than drifting generic.
+ *
+ * The generic facet list survives ONLY as a fallback hint for a broad survey objective, so a
+ * bare-phrase brief decomposes essentially as it did before A3. Fresh questions start at zero
+ * confidence and unresolved; the `questions` reducer replaces wholesale.
  */
-async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
+export async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
   const costTracker = getActiveCostTracker();
   costTracker?.check();
 
+  const { subject, objective, constraints } = state.researchBrief;
+  const constraintsBlock = constraints.length > 0
+    ? constraints.map((c) => `  - ${c}`).join("\n")
+    : "  (none stated)";
+
   const prompt = [
-    "You are the research manager scoping an investigation.",
-    `Topic: ${state.topic}`,
+    "You are the research manager scoping an investigation for an opportunity/market analysis",
+    "committee (a historian, operator, investor and skeptic will evaluate the business case).",
     "",
-    "Break this into 3–5 distinct, researchable questions that together cover the",
-    "topic. Each question should be answerable from web evidence and target a",
-    "different facet (market, customers, competition, economics, risks, etc.).",
+    `SUBJECT: ${subject}`,
+    `OBJECTIVE: ${objective}`,
+    "CONSTRAINTS (respect these — scope every question inside them):",
+    constraintsBlock,
+    "",
+    `Generate ${MIN_QUESTIONS}–${MAX_QUESTIONS} distinct, researchable questions whose answers`,
+    "would together SATISFY the objective. Each must be answerable from web evidence, and the set",
+    "must serve the objective's actual altitude: a broad survey wants wide coverage of the space;",
+    "a go/no-go or thesis wants the questions that would actually settle that specific bet. Stay",
+    "opinionated toward actionable market/opportunity analysis — do NOT drift into generic research.",
+    "",
+    "If (and only if) the objective is a broad survey with no sharper ask, default to covering the",
+    "core facets: market, customers, competition, economics, risks.",
   ].join("\n");
 
   const { output: object, usage } = await generateText({
