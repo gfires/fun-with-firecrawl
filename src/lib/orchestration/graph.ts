@@ -578,6 +578,21 @@ async function runGraphInner(topic: string, budgetOverride?: number): Promise<Ar
       console.log(`[degrade] run halted early — synthesizing partial report`);
     }
 
+    // Self-contained end-of-run summary in the trace (the streaming runner logs its own).
+    trace.log("final_state", {
+      topic,
+      degraded,
+      questionsCount: finalState.questions.length,
+      evidenceCount: finalState.evidence.length,
+      claimsCount: finalState.claims.length,
+      loopIterations: finalState.loopIteration,
+      converged: finalState.converged,
+      budgetSpent: finalState.budgetSpent,
+      budgetRemaining: finalState.budgetRemaining,
+      firecrawlCalls: finalState.firecrawlCalls,
+      firecrawlCredits: finalState.firecrawlCredits,
+    });
+
     return {
       arm: "orchestrated" as const,
       topic,

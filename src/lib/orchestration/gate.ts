@@ -42,7 +42,14 @@ export async function allocateBudget(
 ): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; gateScores: GateScore[] }> {
   // Zero-cost convergence checks first — budget, loop cap, zero-progress loop — so a
   // converged run never pays for a gate classification call.
-  if (gateShortCircuit(state)) {
+  const shortCircuit = gateShortCircuit(state);
+  if (shortCircuit) {
+    getActiveTrace()?.log("gate:converged", {
+      reason: shortCircuit,
+      loopIteration: state.loopIteration,
+      budgetRemaining: state.budgetRemaining,
+      newEvidenceCount: state.newEvidenceCount,
+    });
     return { state: { ...state, converged: true }, continueLoop: false, usage: [], gateScores: [] };
   }
 
@@ -141,6 +148,11 @@ Return a decision for every question ID listed above.`;
   const continueLoop = gateScores.some(d => d.retrieve);
 
   if (!continueLoop) {
+    getActiveTrace()?.log("gate:converged", {
+      reason: "gate-decided-no-retrieve",
+      loopIteration: state.loopIteration,
+      budgetRemaining: state.budgetRemaining,
+    });
     return { state: { ...state, converged: true }, continueLoop: false, usage: callUsage, gateScores };
   }
 

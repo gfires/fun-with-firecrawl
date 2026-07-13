@@ -300,7 +300,7 @@ export async function runCommittee(
 
     const trace = getActiveTrace();
     if (trace) {
-      trace.logLlmCall(`committee:${role}`, { model: model.modelId, prompt: messages }, object, usage);
+      trace.logLlmCall(`committee:${role}`, { model: model.modelId, loopIteration, prompt: messages }, object, usage);
     }
 
     const claim: Claim = {

@@ -181,6 +181,7 @@ async function scrapeOne(
   const cached = await getCache(src.url);
   if (cached !== null) {
     const content = truncate(cached, MAX_CHARS_PER_PAGE);
+    getActiveTrace()?.logFirecrawlCall("scrape-cache-hit", { url: src.url }, content.length);
     onEvent({ type: "scrape:done", id: src.id, domain: src.domain, status: "cached", chars: content.length, ms: 0 });
     return { ...src, content };
   }
@@ -199,6 +200,7 @@ async function scrapeOne(
     const md = "markdown" in res ? (res.markdown ?? "") : "";
     const content = truncate(md, MAX_CHARS_PER_PAGE);
     if (content.length > 0) void setCache(src.url, md);
+    getActiveTrace()?.logFirecrawlCall("scrape", { url: src.url, status: content.length > 0 ? "ok" : "empty" }, content.length);
     onEvent({
       type: "scrape:done",
       id: src.id,
@@ -216,6 +218,7 @@ async function scrapeOne(
       // Fire-and-forget: recording must not delay or fail the scan.
       void recordBlock(src.domain, `auto: hard-block (${e.statusCode ?? "?"}) scraping ${src.url}`, nowIso);
     }
+    getActiveTrace()?.logFirecrawlCall("scrape", { url: src.url, status: hardBlock ? "blocked" : "empty" }, 0);
     onEvent({
       type: "scrape:done",
       id: src.id,
@@ -410,6 +413,7 @@ export async function search(
     queries.map(async (query) => {
       try {
         const cached = await getSearchCache(query);
+        if (cached) getActiveTrace()?.logFirecrawlCall("search-cache-hit", { query }, cached.length);
         const raw = cached
           ? cached
           : await (async () => {

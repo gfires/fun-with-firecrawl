@@ -133,7 +133,8 @@ export async function digestEvidence(
 
     const trace = getActiveTrace();
     if (trace) {
-      trace.logLlmCall(`digest:${question.id}`, { model: digestModel.modelId, prompt }, object, usage);
+      const loopIteration = freshEvidence.reduce((m, e) => Math.max(m, e.loopIteration), 0);
+      trace.logLlmCall(`digest:${question.id}`, { model: digestModel.modelId, loopIteration, prompt }, object, usage);
     }
 
     const validIds = new Set(freshEvidence.map((e) => e.id));
