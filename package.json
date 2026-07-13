@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "compare": "tsx scripts/compare-arms.ts"
+    "compare": "tsx scripts/compare-arms.ts",
+    "smoke:supabase": "tsx scripts/supabase-smoke.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.10",

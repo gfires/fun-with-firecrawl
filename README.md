@@ -9,10 +9,17 @@ Two research arms run side-by-side for direct comparison:
 - **Baseline** — single-prompt pipeline: search → triage → scrape → analyze (the original system)
 - **Orchestrated** — multi-agent LangGraph loop: decompose → retrieve → debate → gate → recommend
 
-The orchestrated arm decomposes a topic into questions, runs a four-agent committee (Historian,
-Operator, Investor, Skeptic) that produces structured claims with calibrated confidence, then a
-value-of-information gate allocates further retrieval budget only toward questions where more
-evidence would change the recommendation. This loops until confidence converges or budget runs out.
+The orchestrated arm decomposes a topic into questions. For each question a four-agent committee
+(Historian, Operator, Investor, Skeptic) each render **one independent** structured claim with
+calibrated confidence over the same evidence — they run in parallel and never see each other's
+claims, so cross-role agreement is real signal and divergence flags a question worth more retrieval.
+A value-of-information gate then allocates further retrieval budget only toward questions where more
+evidence would change the recommendation. This loops until confidence converges, no new evidence
+arrives, or budget runs out.
+
+> **Note:** the committee is a parallel poll of independent perspectives, *not* a back-and-forth
+> debate — no agent reads another's output. The only cross-loop feedback is that a role may revise
+> **its own** prior claim against newly retrieved evidence (see "Incremental re-debate" below).
 
 ---
 
@@ -24,13 +31,19 @@ cp .env.local.example .env.local   # then add your keys
 npm run dev                        # http://localhost:3000
 ```
 
-You need three keys in `.env.local`:
+You need these keys in `.env.local`:
 
 | Var | Where | Used for |
 | --- | --- | --- |
 | `FIRECRAWL_API_KEY` | https://firecrawl.dev | web `/search` + `/scrape` |
 | `OPENAI_API_KEY` | https://platform.openai.com | baseline analysis, triage, skeptic agent |
-| `ANTHROPIC_API_KEY` | https://console.anthropic.com | manager, historian, operator, investor agents |
+| `ANTHROPIC_API_KEY` | https://console.anthropic.com | manager, historian, operator, investor, digest agents |
+| `SUPABASE_URL` | Supabase project settings → API | search/scrape/blocklist cache host |
+| `SUPABASE_ANON_KEY` | Supabase project settings → API | cache access (legacy anon JWT `eyJ…`, not a `sb_publishable_…` key) |
+
+Supabase is optional-but-recommended: without it the app still runs, just uncached at full Firecrawl
+price. Create the schema from [`supabase/schema.sql`](supabase/schema.sql) and add `blindspot` to the
+project's **Exposed schemas**, then confirm with `npm run smoke:supabase`.
 
 ### Run the A/B comparison
 
@@ -56,7 +69,7 @@ industry
    │
    ▼  SEARCH — searchAllIntents()                      src/lib/evidence/firecrawl.ts
    │  8 intents × 8 results each, in parallel via Firecrawl /search.
-   │  Results cached (data/search-cache.json).
+   │  Results cached in Supabase (blindspot.cache).
    │
    ▼  DEDUPE + FILTER — dedupeCandidates()             src/lib/evidence/firecrawl.ts
    │  Collapse to ~50–60 unique URLs, merging intent tags.
@@ -69,7 +82,7 @@ industry
    │  Pure, deterministic. Quota floor (top-2 per intent) + merit fill to 22.
    │
    ▼  SCRAPE — scrapeSources()                         src/lib/evidence/firecrawl.ts
-   │  Bounded concurrency (6 at a time). Cached (data/scrape-cache.json).
+   │  Bounded concurrency (6 at a time). Cached in Supabase (blindspot.cache).
    │
    ▼  ANALYZE — callLLM()                              src/lib/analyze.ts
    │  gpt-4o reads full corpus. JSON output validated by zod.
@@ -90,14 +103,22 @@ topic
    │  search() fetches web evidence for each unresolved question in parallel.
    │  Evidence is append-only across loops. Query count capped to ¼ remaining budget.
    │
+   ▼  DIGEST                                           src/lib/orchestration/digest.ts
+   │  One cheap Haiku pass (L2) compresses each fresh source into a single ≤400-char item
+   │  keyed by its exact evidence id, so the committee reasons over a compact digest
+   │  instead of full page content. Falls back to raw evidence if disabled or on failure.
+   │
    ▼  DEBATE                                           src/lib/orchestration/committee.ts
-   │  Four role-agents each produce an independent Claim per question:
+   │  Four role-agents each produce ONE independent Claim per question (a parallel poll —
+   │  no agent sees another's claim):
    │    Historian (Claude Sonnet 5) — wants precedent
    │    Operator  (Claude Sonnet 5) — wants friction
    │    Investor  (Claude Sonnet 5) — wants returns
    │    Skeptic   (GPT-4o)          — finds failure modes
-   │  Each agent receives full scraped page content, not just snippets.
-   │  Confidence is calibrated identically across all four roles.
+   │  Each agent reads the shared digest block (not raw pages). Confidence is calibrated
+   │  identically across all four roles. The 3 Claude roles share a byte-identical system
+   │  prefix (L3) so Anthropic serves it from prompt cache; gpt-4o calls are concurrency-
+   │  capped (L6) so the skeptic can't trip the TPM ceiling.
    │
    ▼  GATE                                             src/lib/orchestration/gate.ts
    │  LLM classifier (GPT-4o-mini) decides per-question whether to retrieve more.
@@ -112,6 +133,10 @@ topic
    ▼  REFINE (loop only)                               src/lib/orchestration/graph.ts
    │  Manager (Haiku 4.5) generates 1–3 targeted search queries per unresolved
    │  question from the committee's missingEvidence gaps. Skips if no gaps identified.
+   │  On the next loop only fresh evidence is re-digested and only questions with new
+   │  evidence are re-debated; those re-debates drop the 3 Claude roles to Haiku (L4)
+   │  and show each role its OWN prior claim to revise. If a loop retrieves zero new
+   │  evidence the gate short-circuits (no-progress) instead of burning another round.
    │
    ▼  RECOMMEND                                        src/lib/orchestration/graph.ts
    Synthesize ResearchReport: per-question confidence, evidence graph,
@@ -120,6 +145,34 @@ topic
 
 The graph uses a LangGraph `MemorySaver` checkpointer — every super-step is persisted for
 state history and time-travel debugging.
+
+### Token efficiency & loop control (Wave 2)
+
+The orchestrated loop is engineered to spend as few output tokens as possible without losing
+signal. The mechanisms, in the order they fire:
+
+- **L2 — per-question digest** (`digest.ts`): before the committee fans out, one Haiku call
+  compresses each fresh source into a single ≤400-char item keyed by its exact evidence id. The
+  four roles then reason over that compact digest instead of full page content — cutting committee
+  input tokens dramatically and keeping tens of thousands of characters of raw content out of the
+  gpt-4o skeptic's context. A digest failure never kills a run: it falls back to raw evidence.
+- **L3 — prompt-cache split** (`committee.ts` `buildCommitteeMessages`): the QUESTION + evidence
+  block + confidence calibration live in a **system** message that is byte-identical across the
+  three Claude roles, so Anthropic serves it from its prompt cache (read ≈0.1× a fresh write). The
+  historian runs first and writes the cache; operator and investor read it. Role persona and task
+  instructions live in the **user** message, where they vary per role without disturbing the cache.
+- **L4 — loop-aware model mix** (`params.ts` `ROLE_MODEL_IDS` / `REDEBATE_ROLE_MODEL_IDS`): loop 0
+  (the deepest debate) runs the analytical roles on Sonnet 5; re-debates (loop > 0), which only
+  revise a prior claim against a small evidence delta, drop them to Haiku. The skeptic stays on
+  gpt-4o everywhere — a genuinely different model family is the point of the adversarial check.
+- **L6 — per-model concurrency + retries** (`limiter.ts`, `params.ts` `MODEL_CONCURRENCY`): a FIFO
+  semaphore caps in-flight calls per model id (gpt-4o → 2) so a committee fan-out can't trip the TPM
+  ceiling; every `generateText` call retries transient 429/5xx up to `LLM_MAX_RETRIES`.
+- **L1 — incremental re-debate + zero-progress kill** (`graph.ts`, `gate.ts` `gateShortCircuit`):
+  each loop re-digests only fresh evidence and re-debates only questions that received new evidence;
+  a role revises its own prior claim rather than starting over. If a loop retrieves zero new
+  evidence, `gateShortCircuit` returns `no-progress` and the loop ends instead of re-running the
+  same debate. Hard stops are budget exhaustion, `MAX_LOOP_ITERATIONS`, and no-progress.
 
 ---
 
@@ -140,6 +193,7 @@ All tunables live in [`src/lib/params.ts`](src/lib/params.ts):
 | `MAX_CHARS_PER_PAGE` | `4500` | Per-page markdown budget (chars) |
 | `SCRAPE_TIMEOUT_MS` | `20000` | Per-page scrape timeout |
 | `SCRAPE_CONCURRENCY` | `6` | Max simultaneous scrape requests |
+| `FIRECRAWL_CONCURRENCY` | `2` | Shared FIFO cap on all Firecrawl calls (Firecrawl throttles to ~2/account) |
 
 ### Orchestration
 
@@ -152,8 +206,20 @@ All tunables live in [`src/lib/params.ts`](src/lib/params.ts):
 | `MAX_LOOP_ITERATIONS` | `5` | Hard cap on retrieve→debate→gate loops |
 | `TOTAL_FIRECRAWL_BUDGET` | `80` | Hard cap on total Firecrawl credits |
 | `MAX_RUN_COST_USD` | `2.00` | Global LLM cost cap — run halts and synthesizes partial report |
-| `MAX_EVIDENCE_CHARS_PER_AGENT` | `30000` | Per-agent evidence context window cap (chars) |
-| `MAX_CONCLUSION_CHARS` | `400` | Max length for committee claim conclusions |
+| `MAX_EVIDENCE_CHARS_PER_AGENT` | `30000` | Per-agent raw-evidence cap (chars), used only when the digest is off/failed |
+| `MAX_CONCLUSION_CHARS` | `400` | Steering hint for committee conclusion length (a `.describe()` target, not a hard cap) |
+
+### Orchestration — token efficiency (Wave 2)
+
+| Parameter | Default | What it does |
+| --- | --- | --- |
+| `DIGEST_ENABLED` | `true` | L2: run the per-question Haiku digest before the committee (`false` → raw evidence) |
+| `MAX_DIGEST_SUMMARY_CHARS` | `400` | Truncation cap applied in code to each digest item |
+| `PROMPT_CACHE_MIN_CHARS` | `4500` | L3: only attach Anthropic `cacheControl` when the shared system prefix exceeds this |
+| `ROLE_MODEL_IDS` | Sonnet×3 + gpt-4o | L4: per-role models on loop 0 (the deep debate) |
+| `REDEBATE_ROLE_MODEL_IDS` | Haiku×3 + gpt-4o | L4: per-role models on re-debates (loop > 0) |
+| `MODEL_CONCURRENCY` | `{ "gpt-4o": 2 }` | L6: global in-flight cap per model id (models absent → unlimited) |
+| `LLM_MAX_RETRIES` | `4` | L6: retries per `generateText` call on transient 429/5xx |
 
 Model assignments for committee roles are in [`src/lib/models/provider.ts`](src/lib/models/provider.ts).
 
@@ -184,14 +250,21 @@ accounted overshoot rather than reserve against a guessed pre-call cost. If the 
 `BudgetExceededError` is caught — the run immediately synthesizes a partial report from whatever
 state has accumulated, writes the trace, and returns results to the UI.
 
-**Token efficiency** — output tokens are the expensive side ($15/M for Sonnet 5, $10/M for GPT-4o):
-- Committee agents use `ClaimOutputSchema` (5 fields) instead of the full `ClaimSchema` (9 fields),
-  eliminating system-owned fields (`id`, `questionId`, `agentRole`, `loopIteration`) from output.
-- Conclusions capped at 400 chars; `missingEvidence` capped at 3 items of 100 chars each.
-- Evidence content truncated to 2000 chars per source, total capped at `MAX_EVIDENCE_CHARS_PER_AGENT`
-  (30k chars) per agent call — prevents ballooning input on evidence-rich questions.
+**Token efficiency** — both sides of the bill are engineered down (see "Token efficiency & loop
+control" above for the full mechanism list). In short:
+- **Input tokens**: the L2 digest replaces full page content with ≤400-char per-source summaries, and
+  the L3 prompt-cache split lets the 3 Claude roles read a shared system prefix from cache. When the
+  digest is off/failed, raw evidence is capped at `MAX_EVIDENCE_CHARS_PER_AGENT` (30k) per agent.
+- **Output tokens** (the expensive side — $15/M Sonnet 5, $10/M gpt-4o): committee agents emit
+  `ClaimOutputSchema` (5 fields), not the full 9-field `ClaimSchema` — the system-owned fields (`id`,
+  `questionId`, `agentRole`, `loopIteration`) are attached in code, never generated. `missingEvidence`
+  is clamped to 3 items in code; conclusion length is steered by a `.describe()` hint, not a hard cap
+  (per the "no hard caps in LLM output schemas" principle — providers strip them and a slightly-long
+  response would otherwise crash the run).
+- **Per-loop work**: re-debates run on Haiku (L4) and only touch questions with fresh evidence (L1).
 
-Hard stops: `MAX_LOOP_ITERATIONS` (5), Firecrawl budget exhaustion, or LLM cost cap — whichever hits first.
+Hard stops: `MAX_LOOP_ITERATIONS` (5), Firecrawl budget exhaustion, LLM cost cap, or a zero-progress
+loop — whichever hits first.
 
 ### Real-time visualization
 
@@ -201,7 +274,7 @@ Live components show:
 
 - **Pipeline graph** — SVG node graph with loop arc, active/completed node highlighting
 - **Question tracker** — per-question status (pending → retrieving → debating → resolved/looping) with confidence bars
-- **Agent panel** — 4-agent debate claims as they arrive
+- **Agent panel** — the 4 roles' independent claims as they arrive
 - **Evidence feed** — streaming source URLs with titles
 - **Gate decision panel** — per-question retrieve/resolve decisions with gapCount and confidenceSpread
 - **Cost counter** — running LLM token costs and Firecrawl credit spend
@@ -212,13 +285,21 @@ Every orchestrated run writes an exhaustive trace file to `trace-output/<topic>-
 The trace captures everything that happened during the run:
 
 - **Every LLM call** — exact prompts (system + user), full structured responses, token usage
-- **Every Firecrawl call** — query, parameters, result count
-- **Every SSE event** — the complete event stream as sent to the frontend
+  (including cache read/write token counts), and the `loopIteration` the call belongs to
+- **Every Firecrawl call** — query/params, result count, and cache outcome: `search`/`scrape` (live)
+  vs `search-cache-hit`/`scrape-cache-hit`, plus a live scrape's `ok`/`empty`/`blocked` status
+- **Every SSE event** — the complete event stream as sent to the frontend (streaming runs)
 - **State snapshots** — node-level snapshots of question/evidence/claim counts, budget, loop iteration
-- **Final state summary** — total counts, duration, budget spent/remaining, convergence status
+  (streaming runs only)
+- **Convergence** — `gate:converged` records why the loop stopped: `budget` / `max-loops` /
+  `no-progress` / gate-decided
+- **Final state summary** (`final_state`) — total counts, loop iterations, converged flag, budget
+  spent/remaining, Firecrawl calls/credits
 - **Timestamps** — absolute ISO timestamps and elapsed-ms on every entry
 
-Trace files can be large (tens of MB for multi-loop runs). They are gitignored.
+Together these let a single trace file answer reasoning quality, cache hit-ratio, retrieval health,
+and loop/convergence behavior without re-running. Trace files can be large (tens of MB for multi-loop
+runs) and are gitignored.
 
 ---
 
@@ -265,11 +346,14 @@ src/
       firecrawl.ts                search() + explore() — Firecrawl search/scrape
       store.ts                    in-memory Evidence store + contentHash
     orchestration/
-      graph.ts                    StateGraph (decompose→retrieve→debate→gate→refine→recommend)
+      graph.ts                    StateGraph (decompose→retrieve→digest→debate→gate→refine→recommend)
       graph-stream.ts             runGraphStreaming() — streams ResearchEvents from graph nodes
-      committee.ts                runCommittee() — four-role deliberation with full content
-      gate.ts                     allocateBudget() — LLM classifier + budget clamping
-      eval.ts                     ArmResult types + runBaseline() + token tracking
+      committee.ts                runCommittee() — four role-agents, one independent Claim each over the digest
+      digest.ts                   per-question Haiku evidence digest (L2) + prompt/clamp/format helpers
+      gate.ts                     allocateBudget() + gateShortCircuit() — LLM classifier + budget clamping
+      limiter.ts                  createLimiter() — per-model + Firecrawl FIFO concurrency caps (L6)
+      cost-tracker.ts             per-run USD cost cap via AsyncLocalStorage (runWithCostTracker)
+      eval.ts                     ArmResult types + runBaseline() + toAnnotatedUsage() token tracking
       trace.ts                    TraceLogger — exhaustive run trace (prompts, responses, state)
     triage.ts                     intent adaptation + triage scoring + selection
     analyze.ts                    analysis prompt + LLM call + report assembly
@@ -278,9 +362,11 @@ src/
     events.ts                     SSE event union + TokenUsage type (baseline)
     useScanStream.ts              client hook: consume SSE → UI state (baseline)
     intents.ts                    static intent templates (fallback)
-    blocklist.ts                  persistent scrape-hostile domain list
-    scrape-cache.ts               persistent URL→content cache
-    search-cache.ts               persistent query→results cache
+    supabase.ts                   Supabase client (blindspot schema) backing the caches + blocklist
+    warn-once.ts                  dedupe repeated warnings (e.g. "supabase unreachable")
+    blocklist.ts                  scrape-hostile domain list (Supabase-backed)
+    scrape-cache.ts               URL→content cache (Supabase-backed)
+    search-cache.ts               query→results cache (Supabase-backed)
     format.ts                     small pure helpers
     exportPdf.ts                  client-side PDF export
   components/
@@ -288,7 +374,7 @@ src/
       ResearchProgress.tsx        orchestrated run progress container
       PipelineGraph.tsx           SVG pipeline graph with loop arc
       QuestionTracker.tsx         per-question status + confidence bars
-      AgentPanel.tsx              4-agent debate claims display
+      AgentPanel.tsx              the 4 roles' independent claims display
       EvidenceFeed.tsx            streaming evidence source feed
       GateDecisionPanel.tsx       gate decision table with scores
       CostCounter.tsx             live LLM + Firecrawl cost counter
@@ -297,12 +383,15 @@ src/
 scripts/
   compare-arms.ts                 A/B comparison harness (accepts --budget)
   run-arm.ts                      single-arm runner (baseline or orchestrated, accepts --budget)
+  supabase-smoke.ts               live (free) round-trip check of the Supabase cache
+  migrate-caches.mjs              one-time seed of Supabase from the legacy data/*.json files
+supabase/
+  schema.sql                      blindspot schema: cache + blocklist tables, grants, RLS
+  migrations/                     versioned schema migrations
 test/                             vitest unit tests
 trace-output/                     exhaustive trace JSON files from orchestrated runs (gitignored)
 data/
-  blocklist.json                  domains that block scrapers
-  scrape-cache.json               cached scrape results (gitignored)
-  search-cache.json               cached search results (gitignored)
+  blocklist.json                  legacy blocklist seed (runtime now reads Supabase; used only by migrate-caches.mjs)
 ```
 
 ---
@@ -310,24 +399,31 @@ data/
 ## Testing
 
 ```bash
-npx tsc --noEmit       # typecheck
-npx vitest run         # unit tests
+npx tsc --noEmit       # typecheck (zero-cost)
+npx vitest run         # unit tests (zero-cost)
+npm run smoke:supabase # verify the Supabase cache round-trips (live but free)
 npm run dev            # dev server at http://localhost:3000
 npm run compare -- "freight brokerage"   # A/B comparison
 npx tsx scripts/run-arm.ts orchestrated "freight brokerage"  # single arm
-npx tsx scripts/run-arm.ts baseline "topic" --budget 20      # with budget override
+npx tsx scripts/run-arm.ts baseline "topic" --budget=50      # budget override (use --budget=N, not a space)
 ```
 
 ---
 
 ## Caching
 
-Two persistent caches eliminate redundant Firecrawl API calls:
+Two caches, plus the scraper blocklist, live in **Supabase** under the `blindspot` schema — shared
+across processes and both arms, so a cache written by one run (or the compare harness) is seen by the
+next. Backed by `src/lib/supabase.ts`; DDL in [`supabase/schema.sql`](supabase/schema.sql).
 
-- **`data/search-cache.json`** — maps search query → results. Repeated queries skip Firecrawl.
-- **`data/scrape-cache.json`** — maps URL → raw page markdown. Pages seen before are never re-scraped.
+- **`blindspot.cache`** (`type='search'`) — maps search query → results. Repeated queries skip Firecrawl.
+- **`blindspot.cache`** (`type='scrape'`) — maps URL → raw page markdown. Pages seen before are never re-scraped.
+- **`blindspot.blocklist`** — domains that block scrapers (401/403/429/451), auto-added on hard blocks.
 
-Both are gitignored. No TTL — entries persist until manually deleted.
+No TTL — entries persist until manually deleted. If Supabase is unreachable a run degrades gracefully:
+it warns once (`warn-once.ts`) and proceeds uncached at full Firecrawl price rather than failing.
+`npm run smoke:supabase` verifies the round-trip; the schema must be created and `blindspot` added to
+the project's **Exposed schemas** first (see `supabase/schema.sql`).
 
 ---
 

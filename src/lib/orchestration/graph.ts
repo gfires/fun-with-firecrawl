@@ -30,8 +30,8 @@ import { ResearchState, type ResearchStateT, type Question } from "../schemas/st
 import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel } from "../models/provider";
-import { type ArmResult, toAnnotatedUsage, rollupTokens } from "./eval";
-import { MIN_QUESTIONS, MAX_QUESTIONS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS } from "../params";
+import { type ArmResult, type AnnotatedUsage, toAnnotatedUsage, rollupTokens } from "./eval";
+import { MIN_QUESTIONS, MAX_QUESTIONS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
 import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
@@ -40,7 +40,9 @@ import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from ".
 import { search } from "../evidence/firecrawl";
 // committee.ts: run the multi-role committee over a question + evidence → Claims.
 // (committee derives the loop iteration from the evidence's own loopIteration.)
-import { runCommittee } from "./committee";
+import { runCommittee, splitEvidence } from "./committee";
+// digest.ts: compress each question's fresh evidence with a cheap Haiku pass (L2).
+import { digestEvidence, type DigestItem } from "./digest";
 // gate.ts (this package): budget allocation + loop control. Stub for now.
 import { allocateBudget } from "./gate";
 
@@ -82,6 +84,30 @@ export function scopeEvidenceToQuestions(
     }
   }
   return byQuestion;
+}
+
+/**
+ * Which unresolved questions actually need the committee re-run this loop. A question
+ * needs debate iff it is unresolved AND either (a) it has no claims yet, or (b) some of
+ * its scoped evidence is fresh this loop (loopIteration === currentLoop). A question that
+ * is already claimed and gained no new evidence this round would only reproduce the same
+ * deliberation, so we skip it — that's the L1 incremental-debate saving. `currentLoop` is
+ * the current loop number (the gate increments it AFTER debate, so fresh evidence carries
+ * exactly this value during debate).
+ */
+export function questionsNeedingDebate(
+  questions: Question[],
+  evidenceByQuestion: Map<string, Evidence[]>,
+  claims: Claim[],
+  currentLoop: number,
+): Question[] {
+  return questions.filter((q) => {
+    if (q.resolved) return false;
+    const hasClaims = claims.some((c) => c.questionId === q.id);
+    if (!hasClaims) return true;
+    const scoped = evidenceByQuestion.get(q.id) ?? [];
+    return scoped.some((e) => e.loopIteration === currentLoop);
+  });
 }
 
 export function queriesToSearch(
@@ -134,6 +160,7 @@ async function decompose(state: ResearchStateT): Promise<Partial<ResearchStateT>
     model: managerModel,
     output: Output.object({ schema: DecompositionSchema }),
     prompt,
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   const annotated = toAnnotatedUsage(usage, managerModel.modelId, "decompose");
@@ -179,9 +206,11 @@ async function retrieve(
   config?: LangGraphRunnableConfig,
 ): Promise<Partial<ResearchStateT>> {
   const questions = unresolved(state);
-  if (questions.length === 0) return {};
+  // Every return path sets newEvidenceCount so the gate can detect a zero-progress
+  // loop: an early return adds no evidence, so the count is 0.
+  if (questions.length === 0) return { newEvidenceCount: 0 };
   let queries = queriesToSearch(questions, state.searchedQueries);
-  if (queries.length === 0) return {};
+  if (queries.length === 0) return { newEvidenceCount: 0 };
   // Each search query costs ~2 credits; cap so search alone doesn't blow the budget.
   const maxQueries = Math.max(1, Math.floor(state.budgetRemaining / 4));
   if (queries.length > maxQueries) queries = queries.slice(0, maxQueries);
@@ -204,6 +233,7 @@ async function retrieve(
     firecrawlCredits: totalCredits,
     budgetRemaining: -totalCredits,
     budgetSpent: totalCredits,
+    newEvidenceCount: evidence.length,
   };
 }
 
@@ -216,15 +246,53 @@ async function retrieve(
  * far, appending the resulting claims. The `claims` reducer is append-only.
  */
 async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
-  const questions = unresolved(state);
   const evidenceByQuestion = scopeEvidenceToQuestions(state.questions, state.evidence);
-
-  const batches = await Promise.all(
-    questions.map((q) => runCommittee(q, evidenceByQuestion.get(q.id) ?? [])),
+  // Only re-run the committee where it can produce something new (L1). If nothing needs
+  // debate, return an empty delta — the gate then short-circuits via newEvidenceCount===0.
+  const questions = questionsNeedingDebate(
+    state.questions,
+    evidenceByQuestion,
+    state.claims,
+    state.loopIteration,
   );
-  const claims: Claim[] = batches.flatMap((b) => b.claims);
-  const llmCalls = batches.flatMap((b) => b.usage);
-  return { claims, llmCalls };
+  if (questions.length === 0) return {};
+
+  // Per question: digest only THIS loop's fresh evidence (never re-digest old sources),
+  // combine with the prior-loop digests already in state, then run the committee over the
+  // digest. A failed/disabled digest yields no items and the committee falls back to raw
+  // evidence. Digest + committee for each question run concurrently across questions.
+  const batches = await Promise.all(
+    questions.map(async (q) => {
+      const scoped = evidenceByQuestion.get(q.id) ?? [];
+      const { fresh } = splitEvidence(scoped, state.loopIteration);
+      const freshDigest =
+        DIGEST_ENABLED && fresh.length > 0
+          ? await digestEvidence(q, fresh)
+          : { questionId: q.id, items: [] as DigestItem[], usage: undefined };
+      const priorItems = state.digests[q.id] ?? [];
+      const digestItems = [...priorItems, ...freshDigest.items];
+
+      const committee = await runCommittee(
+        q,
+        scoped,
+        state.claims.filter((c) => c.questionId === q.id),
+        digestItems,
+      );
+      return { q, committee, freshItems: freshDigest.items, digestUsage: freshDigest.usage };
+    }),
+  );
+
+  const claims: Claim[] = batches.flatMap((b) => b.committee.claims);
+  const digestUsages = batches
+    .map((b) => b.digestUsage)
+    .filter((u): u is AnnotatedUsage => u !== undefined);
+  const llmCalls = [...digestUsages, ...batches.flatMap((b) => b.committee.usage)];
+  // Persist only this loop's fresh digest items; mergeDigests appends them per question.
+  const digests: Record<string, DigestItem[]> = {};
+  for (const b of batches) {
+    if (b.freshItems.length > 0) digests[b.q.id] = b.freshItems;
+  }
+  return { claims, llmCalls, digests };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +385,7 @@ async function refine(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
     model: managerModel,
     output: Output.object({ schema: RefineSchema }),
     prompt: refinePrompt,
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   const annotated = toAnnotatedUsage(usage, managerModel.modelId, "refine");
@@ -508,6 +577,21 @@ async function runGraphInner(topic: string, budgetOverride?: number): Promise<Ar
     if (degraded) {
       console.log(`[degrade] run halted early — synthesizing partial report`);
     }
+
+    // Self-contained end-of-run summary in the trace (the streaming runner logs its own).
+    trace.log("final_state", {
+      topic,
+      degraded,
+      questionsCount: finalState.questions.length,
+      evidenceCount: finalState.evidence.length,
+      claimsCount: finalState.claims.length,
+      loopIterations: finalState.loopIteration,
+      converged: finalState.converged,
+      budgetSpent: finalState.budgetSpent,
+      budgetRemaining: finalState.budgetRemaining,
+      firecrawlCalls: finalState.firecrawlCalls,
+      firecrawlCredits: finalState.firecrawlCredits,
+    });
 
     return {
       arm: "orchestrated" as const,

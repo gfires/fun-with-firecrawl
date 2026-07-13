@@ -1,11 +1,18 @@
 import { GraphRecursionError } from "@langchain/langgraph";
-import { compileResearchGraph, synthesizeReport, computeRecursionLimit } from "./graph";
+import {
+  compileResearchGraph,
+  synthesizeReport,
+  computeRecursionLimit,
+  scopeEvidenceToQuestions,
+  questionsNeedingDebate,
+} from "./graph";
 import { rollupTokens } from "./eval";
 import type { ArmResult } from "./eval";
 import type { ResearchStateT, Question } from "../schemas/state";
 import type { Evidence } from "../schemas/evidence";
 import type { SearchProgress } from "../evidence/firecrawl";
 import type { Claim } from "../schemas/claim";
+import type { DigestItem } from "./digest";
 import type { AnnotatedUsage } from "./eval";
 import type { ResearchEvent, GateScore } from "../research-events";
 import { TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS } from "../params";
@@ -68,6 +75,12 @@ async function runGraphStreamingInner(
   let currentQuestions: Question[] = [];
   let budgetRemaining = initialBudget;
   const unresolvedIds = () => currentQuestions.filter(q => !q.resolved).map(q => q.id);
+  // Accumulated node outputs needed to mirror the graph's incremental-debate decision:
+  // the eager debate:begin must announce only the questions the debate node will actually
+  // run (questionsNeedingDebate), not every unresolved id. Evidence is append-only in the
+  // graph; claims accrue across loops — we mirror both from the "updates" stream.
+  const allEvidence: Evidence[] = [];
+  const allClaims: Claim[] = [];
 
   let degraded = false;
   let degradeMessage = "";
@@ -143,6 +156,7 @@ async function runGraphStreamingInner(
             const credits = (output.firecrawlCredits ?? 0) as number;
             totalFirecrawlCalls += calls;
             totalFirecrawlCredits += credits;
+            allEvidence.push(...evidence);
             // retrieve returns budget DELTAS (additive reducer) — accumulate to
             // mirror state.budgetRemaining for the post-gate routing prediction.
             budgetRemaining += (output.budgetRemaining ?? 0) as number;
@@ -157,21 +171,47 @@ async function runGraphStreamingInner(
               evidenceCount: evidence.length,
               firecrawlCalls: calls,
             });
-            // Next node is deterministic: retrieve → debate.
-            send({ type: "debate:begin", loopIteration: currentLoopIteration, questionIds: unresolvedIds() });
+            // Next node is deterministic: retrieve → debate. Mirror the debate node's
+            // incremental filter so the begin event announces only the questions that
+            // will actually be re-run this loop (see questionsNeedingDebate in graph.ts).
+            const needing = questionsNeedingDebate(
+              currentQuestions,
+              scopeEvidenceToQuestions(currentQuestions, allEvidence),
+              allClaims,
+              currentLoopIteration,
+            );
+            send({
+              type: "debate:begin",
+              loopIteration: currentLoopIteration,
+              questionIds: needing.map(q => q.id),
+            });
             break;
           }
 
           case "debate": {
             const claims = (output.claims ?? []) as Claim[];
             const usages = (output.llmCalls ?? []) as AnnotatedUsage[];
+            const digests = (output.digests ?? {}) as Record<string, DigestItem[]>;
             allLlmCalls.push(...usages);
+            allClaims.push(...claims);
 
             for (const claim of claims) {
               send({ type: "debate:claim", claim });
             }
 
             for (const u of usages) {
+              // Digest calls are tagged `digest:<questionId>` (see digest.ts) — surface
+              // them as their own event before folding into the usage totals.
+              if (u.label.startsWith("digest:")) {
+                const questionId = u.label.slice("digest:".length);
+                send({
+                  type: "debate:digest",
+                  questionId,
+                  loopIteration: currentLoopIteration,
+                  evidenceCount: digests[questionId]?.length ?? 0,
+                  usage: u,
+                });
+              }
               send({ type: "research:usage", usage: u });
             }
 

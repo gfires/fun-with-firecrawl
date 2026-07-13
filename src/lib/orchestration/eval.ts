@@ -90,25 +90,43 @@ export type AnnotatedUsage = CacheAwareUsage & { label: string; costUsd: number 
  */
 export function toAnnotatedUsage(
   usage:
-    | { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }
+    | {
+        inputTokens?: number;
+        outputTokens?: number;
+        cachedInputTokens?: number;
+        /** AI SDK v7 cache breakdown — the shape providers actually report. */
+        inputTokenDetails?: {
+          cacheReadTokens?: number;
+          cacheWriteTokens?: number;
+          noCacheTokens?: number;
+        };
+      }
     | undefined,
   model: string,
   label: string,
   providerMetadata?: Record<string, unknown>,
 ): AnnotatedUsage {
+  const details = usage?.inputTokenDetails;
   const anthropic = providerMetadata?.anthropic as
     | { cacheCreationInputTokens?: number }
     | undefined;
+
+  // Prefer AI SDK v7's inputTokenDetails.{cacheReadTokens,cacheWriteTokens}; fall back to
+  // the legacy top-level cachedInputTokens / providerMetadata fields for older shapes.
+  const cachedRead =
+    details?.cacheReadTokens ?? usage?.cachedInputTokens ?? 0;
   const cacheCreation =
-    typeof anthropic?.cacheCreationInputTokens === "number"
-      ? anthropic.cacheCreationInputTokens
-      : undefined;
+    typeof details?.cacheWriteTokens === "number"
+      ? details.cacheWriteTokens
+      : typeof anthropic?.cacheCreationInputTokens === "number"
+        ? anthropic.cacheCreationInputTokens
+        : undefined;
 
   const tokenUsage: CacheAwareUsage = {
     model,
     promptTokens: usage?.inputTokens ?? 0,
     completionTokens: usage?.outputTokens ?? 0,
-    cachedPromptTokens: usage?.cachedInputTokens ?? 0,
+    cachedPromptTokens: cachedRead,
     ...(cacheCreation !== undefined ? { cacheCreationTokens: cacheCreation } : {}),
   };
   return { ...tokenUsage, label, costUsd: estimateCostUsd(tokenUsage) };

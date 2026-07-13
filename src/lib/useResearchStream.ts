@@ -224,6 +224,16 @@ export function reduce(state: ResearchUIState, ev: ResearchEvent): ResearchUISta
         ],
       };
 
+    case "debate:digest":
+      return {
+        ...state,
+        phase,
+        trace: [
+          ...state.trace,
+          `$ digested ${ev.evidenceCount} sources for ${ev.questionId} (loop ${ev.loopIteration})`,
+        ],
+      };
+
     case "debate:claim": {
       const newClaims = [...state.claims, ev.claim];
       const newClaimsByQ = { ...state.claimsByQuestion };

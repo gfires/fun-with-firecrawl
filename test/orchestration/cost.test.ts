@@ -120,3 +120,52 @@ describe("toAnnotatedUsage", () => {
     expect(annotated.costUsd).toBe(0);
   });
 });
+
+// AI SDK v7 reports cache tokens under usage.inputTokenDetails, NOT as a top-level
+// cachedInputTokens / providerMetadata.anthropic.cacheCreationInputTokens. These use the
+// exact numbers observed in a real committee run (freight brokerage trace).
+describe("toAnnotatedUsage — AI SDK v7 inputTokenDetails cache tokens", () => {
+  it("reads cacheWriteTokens (cache-creation) from inputTokenDetails on the writing call", () => {
+    const annotated = toAnnotatedUsage(
+      {
+        inputTokens: 12325,
+        outputTokens: 290,
+        inputTokenDetails: { noCacheTokens: 502, cacheReadTokens: 0, cacheWriteTokens: 11823 },
+      },
+      "claude-sonnet-5",
+      "committee:historian",
+    );
+    expect(annotated.promptTokens).toBe(12325);
+    expect(annotated.cacheCreationTokens).toBe(11823);
+    expect(annotated.cachedPromptTokens).toBe(0);
+
+    const expected =
+      (502 / 1_000_000) * SONNET_IN +
+      (11823 / 1_000_000) * 1.25 * SONNET_IN +
+      (290 / 1_000_000) * SONNET_OUT;
+    expect(annotated.costUsd).toBeCloseTo(expected, 10);
+  });
+
+  it("reads cacheReadTokens (cache hit) from inputTokenDetails and prices it at 0.1x", () => {
+    const annotated = toAnnotatedUsage(
+      {
+        inputTokens: 12302,
+        outputTokens: 927,
+        inputTokenDetails: { noCacheTokens: 479, cacheReadTokens: 11823, cacheWriteTokens: 0 },
+      },
+      "claude-sonnet-5",
+      "committee:operator",
+    );
+    expect(annotated.cachedPromptTokens).toBe(11823);
+
+    const cacheAware =
+      (479 / 1_000_000) * SONNET_IN +
+      (11823 / 1_000_000) * 0.1 * SONNET_IN +
+      (927 / 1_000_000) * SONNET_OUT;
+    expect(annotated.costUsd).toBeCloseTo(cacheAware, 10);
+
+    // The whole point: a cache-read call must cost far less than billing all input at full price.
+    const naive = (12302 / 1_000_000) * SONNET_IN + (927 / 1_000_000) * SONNET_OUT;
+    expect(annotated.costUsd).toBeLessThan(naive);
+  });
+});

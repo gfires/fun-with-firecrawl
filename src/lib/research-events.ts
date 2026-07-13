@@ -23,6 +23,7 @@ export type ResearchEvent =
   | { type: "retrieve:evidence"; evidence: Evidence; questionId: string }
   | { type: "retrieve:done"; loopIteration: number; evidenceCount: number; firecrawlCalls: number }
   | { type: "debate:begin"; loopIteration: number; questionIds: string[] }
+  | { type: "debate:digest"; questionId: string; loopIteration: number; evidenceCount: number; usage: AnnotatedUsage }
   | { type: "debate:claim"; claim: Claim }
   | { type: "debate:done"; loopIteration: number; claimCount: number }
   | { type: "gate:begin"; loopIteration: number }
@@ -53,6 +54,7 @@ export function researchPhaseFor(type: ResearchEvent["type"]): ResearchPhase {
     case "retrieve:done":
       return "retrieve";
     case "debate:begin":
+    case "debate:digest":
     case "debate:claim":
     case "debate:done":
       return "debate";

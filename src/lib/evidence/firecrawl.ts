@@ -26,10 +26,20 @@ import { domainOf, truncate } from "../format";
 import { loadBlocklist, blocklistKey, isHardBlock, recordBlock } from "../blocklist";
 import { getCache, setCache } from "../scrape-cache";
 import { getSearchCache, setSearchCache } from "../search-cache";
-import { MAX_CHARS_PER_PAGE, SCRAPE_TIMEOUT_MS, SCRAPE_CONCURRENCY, RESULTS_PER_INTENT, MAX_SCRAPE, QUOTA_FLOOR, SEARCH_CANDIDATES_PER_QUESTION } from "../params";
+import { MAX_CHARS_PER_PAGE, SCRAPE_TIMEOUT_MS, SCRAPE_CONCURRENCY, RESULTS_PER_INTENT, MAX_SCRAPE, QUOTA_FLOOR, SEARCH_CANDIDATES_PER_QUESTION, FIRECRAWL_CONCURRENCY } from "../params";
 import { makeIntents, scoreCandidates, selectSources, triageModel, type Candidate } from "../triage";
 import { type Evidence, contentHash } from "./store";
 import { getActiveTrace } from "../orchestration/trace";
+import { createLimiter } from "../orchestration/limiter";
+
+/**
+ * One shared FIFO queue for EVERY Firecrawl network call — searches and scrapes alike,
+ * across all questions and both arms. Firecrawl throttles to ~FIRECRAWL_CONCURRENCY
+ * simultaneous requests per account; funnelling every call through this limiter keeps us
+ * under that ceiling so bursts don't turn into 429s / timeouts. Module-level so concurrent
+ * runs (e.g. compare-arms running both arms) still share the one account-wide budget.
+ */
+const firecrawlLimiter = createLimiter(FIRECRAWL_CONCURRENCY);
 
 
 /** A search hit before it's promoted to a citable Source. */
@@ -83,7 +93,7 @@ async function searchAllIntents(
         }
 
         apiCalls++;
-        const res = await app.search(intent.query, { limit: resultsPerIntent });
+        const res = await firecrawlLimiter(() => app.search(intent.query, { limit: resultsPerIntent }));
         const hits: SearchHit[] = (res.data ?? [])
           .filter((d) => d.url)
           .map((d) => ({
@@ -171,6 +181,7 @@ async function scrapeOne(
   const cached = await getCache(src.url);
   if (cached !== null) {
     const content = truncate(cached, MAX_CHARS_PER_PAGE);
+    getActiveTrace()?.logFirecrawlCall("scrape-cache-hit", { url: src.url }, content.length);
     onEvent({ type: "scrape:done", id: src.id, domain: src.domain, status: "cached", chars: content.length, ms: 0 });
     return { ...src, content };
   }
@@ -178,13 +189,18 @@ async function scrapeOne(
   onEvent({ type: "scrape:begin", id: src.id, domain: src.domain });
   const t0 = now();
   try {
-    const res = await withTimeout(
-      app.scrapeUrl(src.url, { formats: ["markdown"], onlyMainContent: true, parsePDF: false }),
-      SCRAPE_TIMEOUT_MS,
+    // Timeout lives INSIDE the limiter task so it clocks the actual scrape, not time spent
+    // waiting in the shared Firecrawl queue behind other requests.
+    const res = await firecrawlLimiter(() =>
+      withTimeout(
+        app.scrapeUrl(src.url, { formats: ["markdown"], onlyMainContent: true, parsePDF: false }),
+        SCRAPE_TIMEOUT_MS,
+      ),
     );
     const md = "markdown" in res ? (res.markdown ?? "") : "";
     const content = truncate(md, MAX_CHARS_PER_PAGE);
     if (content.length > 0) void setCache(src.url, md);
+    getActiveTrace()?.logFirecrawlCall("scrape", { url: src.url, status: content.length > 0 ? "ok" : "empty" }, content.length);
     onEvent({
       type: "scrape:done",
       id: src.id,
@@ -202,6 +218,7 @@ async function scrapeOne(
       // Fire-and-forget: recording must not delay or fail the scan.
       void recordBlock(src.domain, `auto: hard-block (${e.statusCode ?? "?"}) scraping ${src.url}`, nowIso);
     }
+    getActiveTrace()?.logFirecrawlCall("scrape", { url: src.url, status: hardBlock ? "blocked" : "empty" }, 0);
     onEvent({
       type: "scrape:done",
       id: src.id,
@@ -226,11 +243,11 @@ interface RankedSource {
  * WHY A WORKER POOL (not Promise.all over everything): Firecrawl throttles concurrent requests,
  * so firing all ~28 scrapes at once makes each one contend for bandwidth — pages that scrape in
  * 2–5s alone balloon to 10–15s and cross the timeout, producing FALSE failures (measured; see
- * SCRAPE_TIMEOUT_MS). Instead, exactly SCRAPE_CONCURRENCY workers pull from a shared cursor
- * (`next`) into the `ranked` array; each worker grabs the next index, scrapes it to completion,
- * then grabs another, until the queue drains. That caps in-flight requests at SCRAPE_CONCURRENCY
- * so each gets enough bandwidth to finish in its natural time, while still overlapping work.
- * Total scrape wall-clock ≈ ceil(N / SCRAPE_CONCURRENCY) × typical-page-latency.
+ * SCRAPE_TIMEOUT_MS). SCRAPE_CONCURRENCY workers pull from a shared cursor (`next`) into `ranked`;
+ * each worker grabs the next index, scrapes it to completion, then grabs another until the queue
+ * drains. The true network cap is now the shared `firecrawlLimiter` (FIRECRAWL_CONCURRENCY) that
+ * wraps the scrapeUrl call itself — the worker pool just overlaps cache lookups and setup ahead of
+ * it, so no scrape sits idle. Total scrape wall-clock ≈ ceil(N / FIRECRAWL_CONCURRENCY) × page-latency.
  *
  * Never throws; results preserve input order (worker writes to results[i]).
  */
@@ -396,11 +413,12 @@ export async function search(
     queries.map(async (query) => {
       try {
         const cached = await getSearchCache(query);
+        if (cached) getActiveTrace()?.logFirecrawlCall("search-cache-hit", { query }, cached.length);
         const raw = cached
           ? cached
           : await (async () => {
               searchCredits += 2;
-              const res = await app.search(query, { limit: fetchLimit });
+              const res = await firecrawlLimiter(() => app.search(query, { limit: fetchLimit }));
               const hits = (res.data ?? [])
                 .filter((d) => d.url)
                 .map((d) => ({
