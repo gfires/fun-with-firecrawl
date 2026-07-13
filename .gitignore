@@ -26,3 +26,4 @@ trace-output/
 .env*.local
 .ittybitty/agents/
 .ittybitty/archive/
+compare-output/
