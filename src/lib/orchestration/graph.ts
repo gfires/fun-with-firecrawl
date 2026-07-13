@@ -38,9 +38,10 @@ import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from ".
 // --- Cross-agent integration imports (implemented on sibling branches) ---------
 // evidence/firecrawl.ts: batch web search (queries, k, loop) → tagged Evidence.
 import { search } from "../evidence/firecrawl";
-// committee.ts: run the multi-role committee over a question + evidence → Claims.
-// (committee derives the loop iteration from the evidence's own loopIteration.)
-import { runCommittee, splitEvidence } from "./committee";
+// committee.ts: run the multi-role committee as a debate over a question + evidence → Claims +
+// transcript. (committee derives the loop iteration from the evidence's own loopIteration.)
+import { runDebate, splitEvidence } from "./committee";
+import type { DebateRound } from "./debate";
 // digest.ts: compress each question's fresh evidence with a cheap Haiku pass (L2).
 import { digestEvidence, type DigestItem } from "./digest";
 // gate.ts (this package): budget allocation + loop control. Stub for now.
@@ -242,8 +243,10 @@ async function retrieve(
 // ---------------------------------------------------------------------------
 
 /**
- * Run the committee over each unresolved question against ALL evidence gathered so
- * far, appending the resulting claims. The `claims` reducer is append-only.
+ * Run the committee as a DEBATE over each unresolved question against ALL evidence gathered
+ * so far, appending each question's FINAL-round claims (the durable positions) and its full
+ * per-question transcript. The `claims` reducer is append-only; `debateTranscripts` replaces
+ * per question (a fresh evidence snapshot discards the prior conversation — see mergeTranscripts).
  */
 async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
   const evidenceByQuestion = scopeEvidenceToQuestions(state.questions, state.evidence);
@@ -258,9 +261,9 @@ async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
   if (questions.length === 0) return {};
 
   // Per question: digest only THIS loop's fresh evidence (never re-digest old sources),
-  // combine with the prior-loop digests already in state, then run the committee over the
+  // combine with the prior-loop digests already in state, then run the debate over the
   // digest. A failed/disabled digest yields no items and the committee falls back to raw
-  // evidence. Digest + committee for each question run concurrently across questions.
+  // evidence. Digest + debate for each question run concurrently across questions.
   const batches = await Promise.all(
     questions.map(async (q) => {
       const scoped = evidenceByQuestion.get(q.id) ?? [];
@@ -272,27 +275,30 @@ async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
       const priorItems = state.digests[q.id] ?? [];
       const digestItems = [...priorItems, ...freshDigest.items];
 
-      const committee = await runCommittee(
+      const debateResult = await runDebate(
         q,
         scoped,
         state.claims.filter((c) => c.questionId === q.id),
         digestItems,
       );
-      return { q, committee, freshItems: freshDigest.items, digestUsage: freshDigest.usage };
+      return { q, debateResult, freshItems: freshDigest.items, digestUsage: freshDigest.usage };
     }),
   );
 
-  const claims: Claim[] = batches.flatMap((b) => b.committee.claims);
+  const claims: Claim[] = batches.flatMap((b) => b.debateResult.claims);
   const digestUsages = batches
     .map((b) => b.digestUsage)
     .filter((u): u is AnnotatedUsage => u !== undefined);
-  const llmCalls = [...digestUsages, ...batches.flatMap((b) => b.committee.usage)];
+  const llmCalls = [...digestUsages, ...batches.flatMap((b) => b.debateResult.usage)];
   // Persist only this loop's fresh digest items; mergeDigests appends them per question.
   const digests: Record<string, DigestItem[]> = {};
+  // Each question's full transcript; mergeTranscripts REPLACES per question (ephemeral snapshot).
+  const debateTranscripts: Record<string, DebateRound[]> = {};
   for (const b of batches) {
     if (b.freshItems.length > 0) digests[b.q.id] = b.freshItems;
+    debateTranscripts[b.q.id] = b.debateResult.rounds;
   }
-  return { claims, llmCalls, digests };
+  return { claims, llmCalls, digests, debateTranscripts };
 }
 
 // ---------------------------------------------------------------------------

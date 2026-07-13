@@ -17,17 +17,25 @@
  * adversarial check is not just a re-prompt of the same weights.
  */
 import { generateText, Output, type ModelMessage } from "ai";
-import { ClaimOutputSchema, type Claim, type AgentRoleT } from "../schemas/claim";
+import { ClaimOutputSchema, DebateTurnOutputSchema, type Claim, type AgentRoleT } from "../schemas/claim";
 import type { Evidence } from "../schemas/evidence";
 import type { Question } from "../schemas/state";
-import { modelForRole } from "../models/provider";
+import { modelForRole, modelForDebateRound } from "../models/provider";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
-import { MAX_EVIDENCE_CHARS_PER_AGENT, PROMPT_CACHE_MIN_CHARS, LLM_MAX_RETRIES } from "../params";
+import {
+  MAX_EVIDENCE_CHARS_PER_AGENT,
+  PROMPT_CACHE_MIN_CHARS,
+  LLM_MAX_RETRIES,
+  MAX_DEBATE_ROUNDS,
+  DEBATE_CONSENSUS_SPREAD,
+  DEBATE_CONSENSUS_MIN_CONFIDENCE,
+  DEBATE_CONFIDENCE_EPSILON,
+} from "../params";
 import { formatDigestForCommittee, type DigestItem } from "./digest";
 import { limiterForModel } from "./limiter";
-import { renderTranscript, type DebateRound } from "./debate";
+import { renderTranscript, roundOneConsensus, debateMovement, type DebateRound } from "./debate";
 
 /**
  * Calibration rules appended to every role prompt. Kept identical across roles so that a
@@ -432,4 +440,123 @@ export async function runCommittee(
   const results = [historian, ...rest];
 
   return { claims: results.map((r) => r.claim), usage: results.map((r) => r.usage) };
+}
+
+/** The full debate for one question: durable final claims, every round's transcript, and usages. */
+export interface DebateResult {
+  /** The FINAL round's claims — the durable positions that cross the retrieval boundary. */
+  claims: Claim[];
+  /** Every round (0 = opening, then conversational), for the transcript channel + reporting. */
+  rounds: DebateRound[];
+  usage: AnnotatedUsage[];
+}
+
+/**
+ * Run the committee as a REAL debate over one question and its (frozen) evidence.
+ *
+ * Round 0 is the existing independent opening (runCommittee): four blind claims, which preserves the
+ * historian-confabulation fix and makes cross-role agreement real signal. If those openings already
+ * AGREE (roundOneConsensus) we stop there — no debate is worth running. Otherwise each role reads the
+ * full prior transcript and the challenges aimed at it and revises across conversational rounds,
+ * conceding ONLY to evidence. Each round is staggered exactly like round 0 (historian first to write
+ * the shared cached prefix, the rest in parallel to read it) so the L3 cache still hits, and uses the
+ * declining-cost model mix (modelForDebateRound). The debate stops when a round doesn't move any
+ * position or open a fresh rebuttal (debateMovement) or at MAX_DEBATE_ROUNDS. Evidence never changes
+ * mid-debate; only the outer retrieval loop adds evidence.
+ */
+export async function runDebate(
+  question: Question,
+  evidence: Evidence[],
+  priorClaims: Claim[] = [],
+  digestItems: DigestItem[] = [],
+): Promise<DebateResult> {
+  const loopIteration = evidence.reduce((max, e) => Math.max(max, e.loopIteration), 0);
+  const evidenceBlock = digestItems.length > 0
+    ? formatDigestForCommittee(evidence, digestItems)
+    : formatEvidence(evidence);
+
+  // Round 0 — the independent opening (blind), identical to today's committee pass.
+  const opening = await runCommittee(question, evidence, priorClaims, digestItems);
+  const rounds: DebateRound[] = [{ round: 0, claims: opening.claims }];
+  const usage: AnnotatedUsage[] = [...opening.usage];
+
+  // Consensus fast-path: genuine agreement on the openings → no debate, no gate retrieval.
+  if (roundOneConsensus(opening.claims, {
+    spread: DEBATE_CONSENSUS_SPREAD,
+    minConfidence: DEBATE_CONSENSUS_MIN_CONFIDENCE,
+  })) {
+    return { claims: opening.claims, rounds, usage };
+  }
+
+  // One role's conversational turn in debate round `r`: revise against the full prior transcript
+  // and the challenges aimed at it. Mirrors runCommittee's per-role wiring (limiter, retries, cost,
+  // trace) but emits a DebateTurnOutput (claim + directed responses).
+  const runTurn = async (
+    role: AgentRoleT,
+    r: number,
+    priorRounds: DebateRound[],
+  ): Promise<{ claim: Claim; usage: AnnotatedUsage }> => {
+    const costTracker = getActiveCostTracker();
+    costTracker?.check();
+
+    const model = modelForDebateRound(role, r, loopIteration);
+    const priorTurn = priorRounds[priorRounds.length - 1].claims.find((c) => c.agentRole === role);
+    const messages = buildDebateMessages(role, question, evidenceBlock, priorRounds, priorTurn, loopIteration);
+
+    const { output: object, usage: rawUsage } = await limiterForModel(model.modelId)(() =>
+      generateText({
+        model,
+        output: Output.object({ schema: DebateTurnOutputSchema }),
+        messages,
+        allowSystemInMessages: true,
+        maxRetries: LLM_MAX_RETRIES,
+      }),
+    );
+
+    const annotated = toAnnotatedUsage(rawUsage, model.modelId, `debate:${role}`);
+    costTracker?.record({ model: model.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+
+    getActiveTrace()?.logLlmCall(`debate:${role}`, { model: model.modelId, loopIteration, debateRound: r, prompt: messages }, object, rawUsage);
+
+    const claim: Claim = {
+      ...object,
+      confidence: Math.max(0, Math.min(1, object.confidence)),
+      missingEvidence: object.missingEvidence.slice(0, 3),
+      id: `${question.id}:${role}:${loopIteration}:d${r}`,
+      questionId: question.id,
+      agentRole: role,
+      loopIteration,
+      debateRound: r,
+      responses: object.responses,
+    };
+    return { claim, usage: annotated };
+  };
+
+  // Conversational rounds 1..MAX. Same stagger as round 0 (historian writes the cache, rest read),
+  // and stop the moment a round produces no movement.
+  for (let r = 1; r <= MAX_DEBATE_ROUNDS; r++) {
+    const priorRounds = [...rounds];
+    const historian = await runTurn("historian", r, priorRounds);
+    const rest = await Promise.all(
+      ROLES.filter((role) => role !== "historian").map((role) => runTurn(role, r, priorRounds)),
+    );
+    const turns = [historian, ...rest];
+    usage.push(...turns.map((t) => t.usage));
+
+    const thisRound: DebateRound = { round: r, claims: turns.map((t) => t.claim) };
+    const movement = debateMovement(rounds[rounds.length - 1], thisRound, DEBATE_CONFIDENCE_EPSILON);
+    getActiveTrace()?.log("debate:round", {
+      questionId: question.id,
+      round: r,
+      moved: movement.moved,
+      newRebuttals: movement.newRebuttals,
+      converged: movement.converged,
+    });
+    rounds.push(thisRound);
+    if (movement.converged) break;
+  }
+
+  // The final round's claims are the durable positions; the full transcript is ephemeral to this
+  // evidence snapshot.
+  return { claims: rounds[rounds.length - 1].claims, rounds, usage };
 }
