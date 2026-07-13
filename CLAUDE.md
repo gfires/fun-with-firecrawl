@@ -1,6 +1,6 @@
 # Project Guide
 
-Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee of four role-agents (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) each render **one independent** structured claim over the same evidence — they run in parallel and do not see each other's claims, so cross-role agreement is real signal and divergence flags a question worth more retrieval — and a VOI gate allocates further retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
+Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee of four role-agents (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) holds a **real debate** over a frozen evidence snapshot (Wave 3): round 0 is the independent **blind** opening (each role renders one claim without seeing the others, so cross-role agreement is real signal), then — unless the openings already agree — the roles read the full transcript and the challenges aimed at them and revise across conversational rounds, conceding only to evidence, until positions stop moving. A VOI gate then routes the *surviving* disagreements — interpretive ones are resolved and reported as a fault line, evidential ones (a named gap) earn more retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
 
 **Current status, changelog, and open issues live in [STATUS.md](STATUS.md).** This file holds stable reference only.
 
@@ -8,21 +8,22 @@ Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl ap
 
 | File | Purpose |
 |------|---------|
-| `src/lib/schemas/state.ts` | ResearchState (LangGraph Annotation) |
+| `src/lib/schemas/state.ts` | ResearchState (LangGraph Annotation) + debateTranscripts channel (mergeTranscripts) |
 | `src/lib/schemas/evidence.ts` | Evidence zod schema |
-| `src/lib/schemas/claim.ts` | Claim zod schema |
+| `src/lib/schemas/claim.ts` | Claim + DebateResponse / DebateTurnOutput zod schemas (debateRound, responses) |
 | `src/lib/models/provider.ts` | Model assignments per agent role |
 | `src/lib/evidence/firecrawl.ts` | search() and explore() |
 | `src/lib/evidence/store.ts` | In-memory Evidence store + contentHash |
 | `src/lib/orchestration/graph.ts` | StateGraph + runGraph() + synthesizeReport() |
-| `src/lib/orchestration/committee.ts` | runCommittee() — four role-agents each render one independent Claim over shared evidence |
+| `src/lib/orchestration/committee.ts` | runCommittee() (blind round-0 opening) + runDebate() (full debate loop) + buildCommitteeMessages/buildDebateMessages |
+| `src/lib/orchestration/debate.ts` | Debate types + pure logic: roundOneConsensus, debateMovement, directedChallenges, renderTranscript, extractContentions, contentionRoute |
 | `src/lib/orchestration/digest.ts` | Per-question Haiku evidence digest (L2) — compresses each source to one item before the committee |
-| `src/lib/orchestration/gate.ts` | allocateBudget() — VOI scoring with per-question claim summaries; gateShortCircuit() (budget / max-loops / no-progress) |
+| `src/lib/orchestration/gate.ts` | allocateBudget() — contention routing (resolve interpretive at zero LLM cost) + VOI scoring; gateShortCircuit() (budget / max-loops / no-progress) |
 | `src/lib/orchestration/limiter.ts` | createLimiter() — per-model + Firecrawl FIFO concurrency caps |
 | `src/lib/orchestration/cost-tracker.ts` | Per-run USD cost cap via AsyncLocalStorage (runWithCostTracker) |
 | `src/lib/orchestration/eval.ts` | ArmResult types + runBaseline() + toAnnotatedUsage() + rollupTokens() |
 | `src/lib/supabase.ts` | Supabase client backing the search/scrape/blocklist caches (`blindspot` schema; see `supabase/schema.sql`) |
-| `src/lib/params.ts` | Orchestration tunables (budget, thresholds, loop limits, digest, prompt-cache, model mix, concurrency) |
+| `src/lib/params.ts` | Orchestration tunables (budget, thresholds, loop limits, digest, prompt-cache, model mix, concurrency, debate rounds/consensus) |
 | `scripts/compare-arms.ts` | A/B comparison harness (accepts --budget) |
 | `src/lib/research-events.ts` | ResearchEvent union (SSE wire protocol for orchestration) |
 | `src/lib/orchestration/graph-stream.ts` | runGraphStreaming() — streaming graph runner |

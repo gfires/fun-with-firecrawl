@@ -7,19 +7,30 @@
 Two research arms run side-by-side for direct comparison:
 
 - **Baseline** — single-prompt pipeline: search → triage → scrape → analyze (the original system)
-- **Orchestrated** — multi-agent LangGraph loop: decompose → retrieve → debate → gate → recommend
+- **Orchestrated** — multi-agent LangGraph loop: decompose → retrieve → digest → debate → gate → recommend
 
-The orchestrated arm decomposes a topic into questions. For each question a four-agent committee
-(Historian, Operator, Investor, Skeptic) each render **one independent** structured claim with
-calibrated confidence over the same evidence — they run in parallel and never see each other's
-claims, so cross-role agreement is real signal and divergence flags a question worth more retrieval.
-A value-of-information gate then allocates further retrieval budget only toward questions where more
-evidence would change the recommendation. This loops until confidence converges, no new evidence
-arrives, or budget runs out.
+The orchestrated arm decomposes a topic into questions, then runs **two nested loops**:
 
-> **Note:** the committee is a parallel poll of independent perspectives, *not* a back-and-forth
-> debate — no agent reads another's output. The only cross-loop feedback is that a role may revise
-> **its own** prior claim against newly retrieved evidence (see "Incremental re-debate" below).
+- **Debate loop (inner)** — for each question a four-agent committee (Historian, Operator, Investor,
+  Skeptic) deliberates over a *frozen* evidence snapshot. Round 0 is the **blind opening**: each role
+  renders one independent, calibrated claim without seeing the others, so cross-role agreement is real
+  signal and not herding. If the openings genuinely agree, the debate stops there. Otherwise the roles
+  read the full transcript and the challenges aimed at them and **revise across conversational rounds**
+  — rebutting, conceding, extending — conceding only to evidence, never to consensus. The loop stops
+  the moment a round moves no position and opens no new rebuttal, or at a hard round cap.
+- **Retrieval loop (outer)** — the only thing that adds evidence. A value-of-information gate reads the
+  disagreements that survived the debate and spends retrieval budget only where a *named evidence gap*
+  could actually settle a dispute. A disagreement with no such gap is interpretive (the roles read the
+  same evidence differently), so it is reported as a fault line rather than chased. This loops until
+  positions converge, no new evidence arrives, or budget runs out.
+
+Preserved disagreement is a first-class output: a committee that "could not agree, and here is the
+exact fault line" is more honest than a forced consensus.
+
+> **Status:** the debate mechanics (Wave 3, phases D1–D5) are implemented and unit-tested (175 tests
+> green), but the live A/B run that quantifies debate-vs-poll is still pending a paid run (see
+> [STATUS.md](STATUS.md)). The debate-arena UI that renders the back-and-forth is tracked separately;
+> today's live visualization still shows each role's round-0 claim, not the full transcript.
 
 ---
 
@@ -108,35 +119,40 @@ topic
    │  keyed by its exact evidence id, so the committee reasons over a compact digest
    │  instead of full page content. Falls back to raw evidence if disabled or on failure.
    │
-   ▼  DEBATE                                           src/lib/orchestration/committee.ts
-   │  Four role-agents each produce ONE independent Claim per question (a parallel poll —
-   │  no agent sees another's claim):
-   │    Historian (Claude Sonnet 5) — wants precedent
-   │    Operator  (Claude Sonnet 5) — wants friction
-   │    Investor  (Claude Sonnet 5) — wants returns
-   │    Skeptic   (GPT-4o)          — finds failure modes
-   │  Each agent reads the shared digest block (not raw pages). Confidence is calibrated
-   │  identically across all four roles. The 3 Claude roles share a byte-identical system
-   │  prefix (L3) so Anthropic serves it from prompt cache; gpt-4o calls are concurrency-
-   │  capped (L6) so the skeptic can't trip the TPM ceiling.
+   ▼  DEBATE   (inner debate loop)                     src/lib/orchestration/committee.ts
+   │  runDebate() deliberates each unresolved question over a FROZEN evidence snapshot:
+   │    Round 0 — blind opening: four independent Claims, no role sees another
+   │      Historian (Sonnet 5) precedent · Operator (Sonnet 5) friction ·
+   │      Investor  (Sonnet 5) returns   · Skeptic  (GPT-4o) failure modes
+   │    Consensus fast-path — if the openings genuinely agree, stop here (no debate)
+   │    Rounds 1..MAX_DEBATE_ROUNDS — each role sees the full transcript + the challenges
+   │      aimed at it and revises (rebut / concede / extend), conceding only to evidence.
+   │      Constructive roles drop to Haiku; the skeptic holds gpt-4o then gpt-4o-mini
+   │      (modelForDebateRound). The debate stops the moment a round moves nothing.
+   │  Movement, consensus, and contention are computed MECHANICALLY (debate.ts) from the
+   │  committee's own confidences, cited-id sets, and response stances — never a self-
+   │  reported score. Each round the 3 Claude roles share a byte-identical system prefix
+   │  (L3 cache); gpt-4o is concurrency-capped (L6). Evidence never changes mid-debate.
    │
-   ▼  GATE                                             src/lib/orchestration/gate.ts
-   │  LLM classifier (GPT-4o-mini) decides per-question whether to retrieve more.
-   │  Uses computed signals (gapCount, confidenceSpread) + claim summaries.
-   │  Decision rules are rule-based in the prompt (not vibe floats):
+   ▼  GATE    (contention routing + VOI)               src/lib/orchestration/gate.ts
+   │  First, per question, read the disagreements that SURVIVED the debate (extractContentions):
+   │    - all-interpretive, or none → RESOLVE here at zero LLM cost, report the fault line
+   │    - any evidential (a named gap that could settle it) → hand to the LLM gate under budget
+   │  The LLM classifier (GPT-4o-mini) then scores the still-open questions on computed signals
+   │  (gapCount, confidenceSpread) + claim summaries. Rule-based, not vibe floats:
    │    - First pass defaults YES unless agents agree and no gaps named
    │    - 3+ overlapping gaps → YES, opposing conclusions → YES
-   │    - Agreement with vague gaps → NO
-   │    - Low budget (≤2) → only highest-gap question
+   │    - Agreement with vague gaps → NO;  Low budget (≤2) → only highest-gap question
    │  If retrieve count exceeds remaining budget, clamped to top-N by gapCount.
    │
    ▼  REFINE (loop only)                               src/lib/orchestration/graph.ts
-   │  Manager (Haiku 4.5) generates 1–3 targeted search queries per unresolved
-   │  question from the committee's missingEvidence gaps. Skips if no gaps identified.
-   │  On the next loop only fresh evidence is re-digested and only questions with new
-   │  evidence are re-debated; those re-debates drop the 3 Claude roles to Haiku (L4)
-   │  and show each role its OWN prior claim to revise. If a loop retrieves zero new
-   │  evidence the gate short-circuits (no-progress) instead of burning another round.
+   │  Manager (Haiku 4.5) turns the CONTESTED gaps — the missingEvidence named by the roles on
+   │  either side of an evidential contention — into 1–3 targeted queries per question, aiming
+   │  the next retrieval at the actual fault line (falls back to all gaps when none is specifically
+   │  contested; skips if no gaps at all). The next loop re-digests only fresh evidence and
+   │  re-debates only questions with new evidence; those re-debates drop the 3 Claude roles to
+   │  Haiku (L4) and seed each role with its OWN final claim from the prior snapshot. A loop that
+   │  retrieves zero new evidence short-circuits the gate (no-progress).
    │
    ▼  RECOMMEND                                        src/lib/orchestration/graph.ts
    Synthesize ResearchReport: per-question confidence, evidence graph,
@@ -173,6 +189,53 @@ signal. The mechanisms, in the order they fire:
   a role revises its own prior claim rather than starting over. If a loop retrieves zero new
   evidence, `gateShortCircuit` returns `no-progress` and the loop ends instead of re-running the
   same debate. Hard stops are budget exhaustion, `MAX_LOOP_ITERATIONS`, and no-progress.
+
+### Real committee debate (Wave 3)
+
+Wave 3 turns the committee from a parallel poll of four monologues into a real debate. A poll doesn't
+earn four agents; the synthesis-through-disagreement is the product. The whole thing is **two nested
+loops, with evidence FROZEN during a debate** — only the outer retrieval loop ever changes it:
+
+```
+RETRIEVE ─► DIGEST ─► DEBATE ─► GATE ─► (REFINE ─► RETRIEVE) ─► …
+                      └── inner debate loop lives entirely inside the DEBATE node ──┘
+```
+
+- **Debate loop** (`committee.ts` `runDebate`, `debate.ts`): round 0 is today's independent blind
+  opening (which preserves the historian-confabulation fix — a role can't herd toward a claim it never
+  saw). Rounds 1..`MAX_DEBATE_ROUNDS` each show a role the full prior transcript plus the challenges
+  aimed at it, and it revises — `rebut` / `concede` / `extend` — emitting a `DebateResponse` per peer
+  it engages. The loop **skips entirely on round-0 consensus** and otherwise stops as soon as a round
+  stops moving.
+- **Every debate signal is mechanical, not a vibe float** (`debate.ts`, all pure + unit-tested):
+  `roundOneConsensus` (tight confidence spread, above a floor, no contradiction — genuine agreement,
+  not shared uncertainty), `debateMovement` (a role moved if its confidence shifted past an epsilon or
+  its cited-id set changed; a rebuttal is "new" only by `from→target` pair identity, never by matching
+  the free-text point), and `extractContentions` (a surviving disagreement is `evidential` if either
+  side names a `missingEvidence` gap, else `interpretive`). Nothing casts a qualitative judgment into
+  a made-up 0–1 score.
+- **Marginal-utility shut-offs, enforced in code:** the debate exits on low round-over-round movement,
+  a hard `MAX_DEBATE_ROUNDS` cap, or round-0 consensus. At the gate, `contentionRoute` sends
+  interpretive-only (or agreed) questions straight to *resolve* at **zero LLM cost** — retrieving
+  can't settle a difference of interpretation — and only evidential contentions plus budget trigger
+  another retrieval, whose queries `refine` draws from the *contested* gaps specifically.
+- **Model mix — heavy models spent sparingly** (`provider.ts` `modelForDebateRound`): round 0 is the
+  Sonnet trio + gpt-4o skeptic; conversational rounds drop the constructive roles to Haiku (declining
+  marginal value), and the skeptic holds gpt-4o through `DEBATE_SKEPTIC_STRONG_ROUNDS` then drops to
+  gpt-4o-mini. Movement/contention detection is pure code, so it's free.
+- **Anti-sycophancy guard:** three roles share Sonnet, so peer views can induce agreement. Every role
+  is instructed to **concede only to evidence, never to consensus — if you move, cite the id that
+  moved you**, and the skeptic stays cross-family (OpenAI) throughout. The `final_state` trace records
+  concession counts so a flip that cites no new id is measurable.
+- **What crosses the retrieval boundary:** within a debate the full transcript is live context; across
+  loops only each role's FINAL claim survives (its `priorClaim` seed). The transcript is ephemeral to
+  one evidence snapshot (`debateTranscripts` replaces per question via `mergeTranscripts`); the durable
+  Claims are the carrier. The L3 prompt cache is preserved throughout — the shared system prefix
+  (including the rendered transcript) stays byte-identical across the three Claude roles in a round.
+
+Out of scope in this wave and tracked separately: the debate-arena UI, the SSE `debate:round` events,
+and the poll-vs-debate eval harness (D6). The live visualization still renders each role's round-0
+claim, not the transcript.
 
 ---
 
@@ -221,7 +284,18 @@ All tunables live in [`src/lib/params.ts`](src/lib/params.ts):
 | `MODEL_CONCURRENCY` | `{ "gpt-4o": 2 }` | L6: global in-flight cap per model id (models absent → unlimited) |
 | `LLM_MAX_RETRIES` | `4` | L6: retries per `generateText` call on transient 429/5xx |
 
-Model assignments for committee roles are in [`src/lib/models/provider.ts`](src/lib/models/provider.ts).
+### Orchestration — debate (Wave 3)
+
+| Parameter | Default | What it does |
+| --- | --- | --- |
+| `MAX_DEBATE_ROUNDS` | `3` | Hard cap on conversational rounds per question (round 0 opening excluded) |
+| `DEBATE_SKEPTIC_STRONG_ROUNDS` | `2` | Skeptic stays gpt-4o through this round, then drops to gpt-4o-mini |
+| `DEBATE_CONSENSUS_SPREAD` | `0.2` | Round-0 fast-path: max−min confidence must be under this to count as agreement |
+| `DEBATE_CONSENSUS_MIN_CONFIDENCE` | `0.6` | Round-0 fast-path: every role must be at/above this (rules out shared uncertainty) |
+| `DEBATE_CONFIDENCE_EPSILON` | `0.05` | A confidence move at or below this counts as "no movement" for convergence |
+
+Model assignments for committee roles are in [`src/lib/models/provider.ts`](src/lib/models/provider.ts)
+(`modelForRole` for the opening, `modelForDebateRound` for conversational rounds).
 
 ### Budget model
 
@@ -274,10 +348,14 @@ Live components show:
 
 - **Pipeline graph** — SVG node graph with loop arc, active/completed node highlighting
 - **Question tracker** — per-question status (pending → retrieving → debating → resolved/looping) with confidence bars
-- **Agent panel** — the 4 roles' independent claims as they arrive
+- **Agent panel** — the 4 roles' claims as they arrive
 - **Evidence feed** — streaming source URLs with titles
 - **Gate decision panel** — per-question retrieve/resolve decisions with gapCount and confidenceSpread
 - **Cost counter** — running LLM token costs and Firecrawl credit spend
+
+> The agent panel currently renders each role's **round-0 opening claim**. Streaming the full debate
+> transcript (who-challenged-whom, concede/hold across rounds) is the debate-arena UI tracked with D6;
+> until it lands, the back-and-forth lives in the trace file, not the live view.
 
 ### Trace logging
 
@@ -291,10 +369,14 @@ The trace captures everything that happened during the run:
 - **Every SSE event** — the complete event stream as sent to the frontend (streaming runs)
 - **State snapshots** — node-level snapshots of question/evidence/claim counts, budget, loop iteration
   (streaming runs only)
+- **Debate** — `debate:round` per conversational round (round number + mechanical movement:
+  `moved` / `newRebuttals` / `converged`) and `debate:contentions` per question (evidential vs
+  interpretive counts, and whether the gate resolved it without an LLM call)
 - **Convergence** — `gate:converged` records why the loop stopped: `budget` / `max-loops` /
-  `no-progress` / gate-decided
+  `no-progress` / `contention-resolved` / gate-decided
 - **Final state summary** (`final_state`) — total counts, loop iterations, converged flag, budget
-  spent/remaining, Firecrawl calls/credits
+  spent/remaining, Firecrawl calls/credits, and a `debate` rollup (questions debated, conversational
+  rounds, evidential/interpretive contention counts, total concessions)
 - **Timestamps** — absolute ISO timestamps and elapsed-ms on every entry
 
 Together these let a single trace file answer reasoning quality, cache hit-ratio, retrieval health,
@@ -337,9 +419,9 @@ src/
     research-events.ts            ResearchEvent union type (SSE wire protocol)
     useResearchStream.ts          client hook + pure reducer for orchestrated research SSE
     schemas/
-      state.ts                    ResearchState (LangGraph Annotation) + Question type
+      state.ts                    ResearchState (Annotation) + Question + debateTranscripts channel
       evidence.ts                 Evidence zod schema
-      claim.ts                    Claim zod schema + AgentRole enum
+      claim.ts                    Claim + DebateResponse/DebateTurnOutput schemas + AgentRole enum
     models/
       provider.ts                 model assignments per agent role
     evidence/
@@ -348,9 +430,10 @@ src/
     orchestration/
       graph.ts                    StateGraph (decompose→retrieve→digest→debate→gate→refine→recommend)
       graph-stream.ts             runGraphStreaming() — streams ResearchEvents from graph nodes
-      committee.ts                runCommittee() — four role-agents, one independent Claim each over the digest
+      committee.ts                runCommittee() (blind opening) + runDebate() (full debate) + message builders
+      debate.ts                   debate types + pure logic (consensus, movement, contentions, transcript)
       digest.ts                   per-question Haiku evidence digest (L2) + prompt/clamp/format helpers
-      gate.ts                     allocateBudget() + gateShortCircuit() — LLM classifier + budget clamping
+      gate.ts                     allocateBudget() + gateShortCircuit() + contention routing — LLM gate + clamps
       limiter.ts                  createLimiter() — per-model + Firecrawl FIFO concurrency caps (L6)
       cost-tracker.ts             per-run USD cost cap via AsyncLocalStorage (runWithCostTracker)
       eval.ts                     ArmResult types + runBaseline() + toAnnotatedUsage() token tracking

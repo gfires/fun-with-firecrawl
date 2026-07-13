@@ -4,7 +4,7 @@ Running log of what's built and what's left. Stable reference (architecture, key
 
 ## What this is
 
-Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) each render one independent structured claim over the same evidence (parallel poll, not a back-and-forth debate), and a VOI gate allocates further retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
+Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) holds a real debate over a frozen evidence snapshot — round 0 is the independent blind opening, then (unless the openings agree) the roles read each other's positions and revise across conversational rounds until they stop moving (Wave 3) — and a VOI gate routes the surviving disagreements, resolving interpretive ones and spending retrieval budget only on evidential gaps. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
 
 ## Wave 2 — token-efficiency overhaul (branch `wave-2-tokens`, ships to `visualization`)
 
@@ -21,7 +21,20 @@ Cuts orchestrated-arm token spend without losing signal. Phases, in graph order:
 - **Trace observability**: added `gate:converged` (with reason), `final_state` summary, `search/scrape-cache-hit` + live `scrape` outcome logging, and `loopIteration` on committee/digest LLM calls — so a single trace file fully explains reasoning quality, cache effectiveness, retrieval health, and convergence.
 - **Historian confabulation fix** (2026-07-13): on precedent-free questions the historian claimed "no evidence was supplied" though the identical block was given to (and cited by) the other 3 roles — an over-generalization from the L3 system/user split, where the user message never pointed at the system evidence. Fix: a shared anchor line in every role's user message ("The QUESTION and its EVIDENCE are in the system message above…") + de-absolutized historian persona ("no precedent in this evidence" ≠ "no evidence at all"; never claim none was given). Covered by `test/orchestration/committee-messages.test.ts`. **Live-verified** on the 2026-07-13T17-30 freight-brokerage trace: 0/20 committee calls confabulated "no evidence supplied" (was 2/16), 0 claims cited zero support (historian now 3–6 supporting ids per claim), calibration held.
 
-**Known design characteristic (not a bug):** the committee is a **parallel poll of independent claims, not a debate** — no role ever reads another role's output. The only cross-loop feedback is a role revising its OWN prior claim. Genuine cross-agent rebuttal (e.g. a round 2 where each role sees the skeptic's claim) is unbuilt and would be a deliberate architectural add.
+**Resolved in Wave 3 (below):** the committee was a parallel poll of independent claims. Wave 3 makes it a real debate — round 0 stays the blind opening (so cross-role agreement is still real signal), then the roles read each other and revise across rounds. See the Wave 3 section for details.
+
+## Wave 3 — real committee debate (branch `visualization-v1`, base `wave-3-debate`)
+
+Turns the committee from a parallel poll of four monologues into a real debate: agents read each other's positions and respond (rebut / concede / extend) across rounds until positions stop moving. **Two nested loops, evidence FROZEN during a debate** — only the outer retrieval loop adds evidence. D0 (schemas, `debateTranscripts` channel, params) landed earlier; D1–D5 below.
+
+- **D1 — pure debate logic** (`debate.ts`): `roundOneConsensus` (genuine agreement — tight spread, above a floor, no contradiction — not shared low-confidence uncertainty), `debateMovement` (a role moved if confidence shifted past epsilon or its cited-id set changed; rebuttals counted by `from→target` pair identity, never fuzzy-matching the point text), `directedChallenges`, `renderTranscript` (byte-stable), `extractContentions` (evidential vs interpretive). All zero-LLM, computed from real committee output — no vibe floats.
+- **D2 — cache-preserving debate messages** (`committee.ts` `buildDebateMessages`): the shared system prefix (question + evidence/digest block + rendered transcript + calibration) stays byte-identical across the 3 Claude roles so the L3 prompt cache still hits; per-role challenges, prior turn, and task live in the user message.
+- **D3 — debate model policy** (`provider.ts` `modelForDebateRound`): round 0 keeps the loop-aware opening mix; conversational rounds drop the constructive roles to Haiku, and the skeptic holds gpt-4o through `DEBATE_SKEPTIC_STRONG_ROUNDS` then drops to gpt-4o-mini.
+- **D4 — `runDebate`** (`committee.ts`): round-0 blind opening → consensus fast-path → conversational rounds (historian-first stagger preserved for the cache) → movement-based early stop / `MAX_DEBATE_ROUNDS` cap. Returns the final round's claims (durable) + the full transcript; the graph debate node now returns `debateTranscripts` (replace-per-question via `mergeTranscripts`).
+- **D5 — gate contention routing** (`gate.ts`): `contentionRoute` resolves interpretive-only (or agreed) questions at **zero LLM cost** and reports the fault line; only evidential contentions (a named gap) reach the LLM gate under budget. `refine` draws its second-pass queries from the *contested* gaps specifically; the `final_state` trace gains debate stats (rounds run, evidential/interpretive counts, concessions), plus `debate:round` and `debate:contentions` trace entries.
+- **Single source of truth cleanup**: `directedChallenges` returns `{ from, response }` so `buildDebateMessages` reads it directly instead of re-walking claims to recover the challenger — the challenger stays on the owning claim's `agentRole`, never denormalized onto the LLM-output `DebateResponse`.
+
+**Status:** all D1–D5 committed, `tsc` clean, **175 vitest tests green**. **NOT yet live-verified** — no paid run has exercised the debate end-to-end (see Remaining). **D6 (streaming SSE `debate:round` events, debate-arena UI, report of unresolved contentions, poll-vs-debate eval harness) is OUT OF SCOPE** and tracked on a separate branch; the live UI still renders round-0 claims.
 
 ## Done
 
@@ -40,8 +53,9 @@ Cuts orchestrated-arm token spend without losing signal. Phases, in graph order:
 
 - **Re-run "freight brokerage" to confirm the historian fix live.** The 2026-07-13 trace (budget 50) showed the historian confabulating "no evidence" on 2 of 4 questions; the anchor + persona fix is committed but only unit-verified. Next trace should show the historian citing ≥1 id whenever the block is non-empty.
 - **Multi-loop run never exercised live.** Every trace so far converges in one loop (`no-progress`, 0 new evidence on loop 1), so the re-debate path (L1/L4 Haiku, incremental prior-claim revision) has never actually fired end-to-end. Bump budget / pick a topic that keeps surfacing new evidence to exercise it.
-- **Decide whether the committee should actually debate.** Today it's a parallel poll of independent claims — see the "Known design characteristic" note above. A genuine round-2 rebuttal (each role shown the others' claims, esp. the skeptic's) is an architectural add, not a bug fix.
-- Tune budget/threshold constants from real output once the above land.
+- **Live-verify the Wave 3 debate.** D1–D5 are unit-tested (175 green) but no paid run has exercised the debate end-to-end. Protocol: `npx tsx scripts/run-arm.ts orchestrated "<contested topic>" --budget=50` on a topic that keeps surfacing evidence (must exercise ≥1 conversational debate round AND ≥1 second retrieval loop), then inspect the newest `trace-output/*.trace.json` for `debate:round` movement, `debate:contentions`, the `final_state.debate` stats, and confirm the historian still cites evidence ids in round 0. The human runs all live/paid verification.
+- **~~Decide whether the committee should actually debate.~~** Done in Wave 3 (see above) — it now debates, with round 0 kept blind so cross-role agreement stays real signal.
+- Tune the debate/consensus/movement constants (`MAX_DEBATE_ROUNDS`, `DEBATE_CONSENSUS_*`, `DEBATE_CONFIDENCE_EPSILON`) and budget thresholds from real output once the live run lands.
 
 ## Open issues
 
