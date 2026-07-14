@@ -3,7 +3,7 @@ import type { Mock } from "vitest";
 import { generateText } from "ai";
 import { decompose } from "@/lib/orchestration/graph";
 import { fallbackBrief, type ResearchBrief } from "@/lib/schemas/brief";
-import { MAX_QUESTIONS } from "@/lib/params";
+import { MAX_QUESTIONS, MAX_SEARCH_QUERIES_PER_QUESTION } from "@/lib/params";
 import type { ResearchStateT } from "@/lib/schemas/state";
 import { fakeGenResult } from "../helpers/mock-ai";
 
@@ -23,10 +23,10 @@ function lastPrompt(): string {
 }
 
 /** Program the manager to return N generic questions so decompose resolves. */
-function mockQuestions(n = 3) {
+function mockQuestions(n = 3, extra: Record<string, unknown> = {}) {
   (generateText as Mock).mockResolvedValue(
     fakeGenResult({
-      questions: Array.from({ length: n }, (_, i) => ({ text: `q${i}`, category: `cat${i}` })),
+      questions: Array.from({ length: n }, (_, i) => ({ text: `q${i}`, category: `cat${i}`, ...extra })),
     }),
   );
 }
@@ -71,6 +71,32 @@ describe("decompose (objective-driven)", () => {
     }
     expect(prompt).toContain("Assess the opportunity in freight brokerage");
     expect(prompt).toContain("(none stated)"); // empty constraints render explicitly
+  });
+
+  it("asks for keyword search queries and threads them onto each question", async () => {
+    // #2: retrieve prefers Question.searchQueries over the verbose question sentence (which searches
+    // poorly). decompose now emits short keyword queries per question in the same LLM call.
+    mockQuestions(2, { searchQueries: ["mid-market law firm AI review pricing", "legal AI cost per seat"] });
+    const out = await decompose(stateOf(fallbackBrief("legal AI")));
+
+    expect(lastPrompt()).toContain("keyword search queries");
+    expect(out.questions![0].searchQueries).toEqual([
+      "mid-market law firm AI review pricing",
+      "legal AI cost per seat",
+    ]);
+  });
+
+  it("clamps searchQueries per question to MAX_SEARCH_QUERIES_PER_QUESTION", async () => {
+    const many = Array.from({ length: MAX_SEARCH_QUERIES_PER_QUESTION + 4 }, (_, i) => `kw${i}`);
+    mockQuestions(1, { searchQueries: many });
+    const out = await decompose(stateOf(fallbackBrief("x")));
+    expect(out.questions![0].searchQueries).toHaveLength(MAX_SEARCH_QUERIES_PER_QUESTION);
+  });
+
+  it("omits searchQueries when the manager gives none (retrieve falls back to the question text)", async () => {
+    mockQuestions(1); // no searchQueries in the mock output
+    const out = await decompose(stateOf(fallbackBrief("x")));
+    expect(out.questions![0].searchQueries).toBeUndefined();
   });
 
   it("clamps the returned question count to MAX_QUESTIONS", async () => {

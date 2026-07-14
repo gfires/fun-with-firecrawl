@@ -32,7 +32,7 @@ import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel, gateModel } from "../models/provider";
 import { type ArmResult, type AnnotatedUsage, toAnnotatedUsage, rollupTokens } from "./eval";
-import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
+import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
 import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
@@ -212,6 +212,13 @@ const DecompositionSchema = z.object({
         category: z
           .string()
           .describe('theme, e.g. "market structure" or "willingness to pay"'),
+        searchQueries: z
+          .array(z.string())
+          .describe(
+            "1-2 SHORT keyword search queries (NOT the full question sentence) that would surface " +
+              'the best public evidence — e.g. "mid-market law firm AI contract review pricing". Use ' +
+              "the space's real jargon and named tools; a long natural-language question searches poorly.",
+          ),
       }),
     )
     .describe(`between ${MIN_QUESTIONS} and ${MAX_QUESTIONS} questions`),
@@ -254,6 +261,9 @@ export async function decompose(state: ResearchStateT): Promise<Partial<Research
     "",
     "If (and only if) the objective is a broad survey with no sharper ask, default to covering the",
     "core facets: market, customers, competition, economics, risks.",
+    "",
+    "For EACH question also give 1–2 SHORT keyword search queries (not the sentence) — the literal",
+    "strings we will search — using the space's real jargon, named tools, and specifics.",
   ].join("\n");
 
   const { output: object, usage } = await generateText({
@@ -279,6 +289,11 @@ export async function decompose(state: ResearchStateT): Promise<Partial<Research
     category: q.category,
     confidence: 0,
     resolved: false,
+    // Keyword queries drive retrieval (retrieve/queriesToSearch prefer these over q.text). Clamp
+    // count in code; omit when absent so retrieve falls back to the question text (pre-#2 behavior).
+    ...(q.searchQueries?.length
+      ? { searchQueries: q.searchQueries.slice(0, MAX_SEARCH_QUERIES_PER_QUESTION) }
+      : {}),
   }));
 
   return {

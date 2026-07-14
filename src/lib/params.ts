@@ -42,6 +42,9 @@ export const MAX_BRIEF_CONSTRAINTS = 8;
 
 export const MIN_QUESTIONS         = 3;
 export const MAX_QUESTIONS         = 5;
+// Keyword search queries decompose emits per question (used verbatim by retrieve instead of the
+// full question sentence, which searches poorly). Clamped in code — LLM output carries no max.
+export const MAX_SEARCH_QUERIES_PER_QUESTION = 3;
 
 // -- Orchestration: retrieve -------------------------------------------------
 
