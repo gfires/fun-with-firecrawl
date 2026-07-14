@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { compileResearchGraph, synthesizeReport, computeRecursionLimit } from "@/lib/orchestration/graph";
+import { compileResearchGraph, synthesizeReport, computeRecursionLimit, resultsPerQuestionForLoop } from "@/lib/orchestration/graph";
+import { RESULTS_PER_QUESTION, RECON_RESULTS_PER_QUESTION } from "@/lib/params";
 import { accumulate } from "@/lib/schemas/state";
 import { fallbackBrief } from "@/lib/schemas/brief";
 import type { ResearchStateT, Question } from "@/lib/schemas/state";
@@ -57,6 +58,25 @@ describe("computeRecursionLimit", () => {
     for (let n = 0; n < 8; n++) {
       expect(computeRecursionLimit(n + 1)).toBeGreaterThan(computeRecursionLimit(n));
     }
+  });
+});
+
+describe("resultsPerQuestionForLoop", () => {
+  it("scrapes the shallow recon depth on loop 0", () => {
+    // Loop 0 is reconnaissance — fewer results per query than the later targeted passes.
+    expect(resultsPerQuestionForLoop(0)).toBe(RECON_RESULTS_PER_QUESTION);
+  });
+
+  it("scrapes the full depth on every later, gap-targeted pass", () => {
+    for (const loop of [1, 2, 5]) {
+      expect(resultsPerQuestionForLoop(loop)).toBe(RESULTS_PER_QUESTION);
+    }
+  });
+
+  it("keeps recon at or above the grounding floor of 3, and below full depth", () => {
+    // The floor guards the "historian confabulation" bug; recon must still be shallower than full.
+    expect(RECON_RESULTS_PER_QUESTION).toBeGreaterThanOrEqual(3);
+    expect(RECON_RESULTS_PER_QUESTION).toBeLessThan(RESULTS_PER_QUESTION);
   });
 });
 

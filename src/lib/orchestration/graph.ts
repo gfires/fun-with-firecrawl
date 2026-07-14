@@ -32,7 +32,7 @@ import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel, gateModel } from "../models/provider";
 import { type ArmResult, type AnnotatedUsage, toAnnotatedUsage, rollupTokens, estimateCostUsd } from "./eval";
-import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, MAX_LOOP_SPEND_FRACTION, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
+import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, RECON_RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, MAX_LOOP_SPEND_FRACTION, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
 import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
@@ -111,6 +111,17 @@ export function questionsNeedingDebate(
     const scoped = evidenceByQuestion.get(q.id) ?? [];
     return scoped.some((e) => e.loopIteration === currentLoop);
   });
+}
+
+/**
+ * Results scraped per query for a given outer loop (layer 2): shallow RECONNAISSANCE on loop 0
+ * (RECON_RESULTS_PER_QUESTION), full depth (RESULTS_PER_QUESTION) on every later, gap-targeted pass.
+ * Loop 0 doesn't yet know what's missing, so each page buys generic coverage — scrape just enough to
+ * seed grounded round-0 claims and let the committee name its gaps; once a gap is named, the targeted
+ * passes go deep where the marginal value is high. See RECON_RESULTS_PER_QUESTION for the grounding floor.
+ */
+export function resultsPerQuestionForLoop(loopIteration: number): number {
+  return loopIteration === 0 ? RECON_RESULTS_PER_QUESTION : RESULTS_PER_QUESTION;
 }
 
 export function queriesToSearch(
@@ -329,8 +340,8 @@ async function retrieve(
 
   // Results scraped per query this pass. Single seam for the loop-0-reconnaissance depth split
   // (layer 2): keep this the only place the per-pass `k` is chosen so the budget estimate below
-  // and the search() call below stay consistent.
-  const k = RESULTS_PER_QUESTION;
+  // and the search() call below stay consistent. Shallow on loop 0, full depth on later passes.
+  const k = resultsPerQuestionForLoop(state.loopIteration);
 
   // Reserve budget across the outer loop (layer 1): cap this pass at MAX_LOOP_SPEND_FRACTION of the
   // run's INITIAL Firecrawl budget, so the broad first pass can't drain the pool and starve the

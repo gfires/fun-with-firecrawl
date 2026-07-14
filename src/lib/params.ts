@@ -52,6 +52,15 @@ export const MAX_SEARCH_QUERIES_PER_QUESTION = 1;
 // -- Orchestration: retrieve -------------------------------------------------
 
 export const RESULTS_PER_QUESTION  = 6;
+// Loop-0 reconnaissance depth (layer 2): the broad first pass scrapes FEWER results per query than
+// the later gap-targeted passes. Marginal value of evidence is inverted against depth — on loop 0 you
+// don't yet know what's missing, so each page buys generic coverage; after a debate the committee has
+// NAMED the gap, so a targeted scrape buys exactly what would move a position. Loop 0 is therefore
+// reconnaissance: just enough to seed grounded round-0 claims and let the committee name its gaps.
+// GROUNDING FLOOR — do NOT drop below 3: thin evidence historically caused a "historian confabulation"
+// bug (roles claiming about evidence that isn't there and mis-calibrating their missingEvidence), so
+// recon must stay deep enough that round-0 claims and their named gaps are trustworthy.
+export const RECON_RESULTS_PER_QUESTION = 3;
 export const SEARCH_CANDIDATES_PER_QUESTION = 10;
 
 // Relevance triage (orchestrated retrieve): one cheap gpt-4o-mini call scores every deduped search
