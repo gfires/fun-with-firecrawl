@@ -2,12 +2,13 @@ import { generateText, Output } from "ai";
 import { z } from "zod";
 import { gateClassifierModel } from "../models/provider";
 import type { ResearchStateT } from "../schemas/state";
-import { MAX_LOOP_ITERATIONS, LLM_MAX_RETRIES } from "../params";
+import { MAX_LOOP_ITERATIONS, LLM_MAX_RETRIES, LOOP_CONFIDENCE_EPSILON } from "../params";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import type { GateScore } from "../research-events";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
 import { extractContentions, contentionRoute, type Contention } from "./debate";
+import type { Claim } from "../schemas/claim";
 
 const GateDecisionSchema = z.object({
   decisions: z.array(z.object({
@@ -38,6 +39,33 @@ export function gateShortCircuit(
   return null;
 }
 
+/**
+ * Diminishing-returns shut-off for the outer retrieval loop (zero LLM cost). Compares a question's
+ * committee state across the two most recent loops it was debated in (claims are tagged with
+ * loopIteration; state.claims holds the final-round claims per loop). Retrieval is "diminishing" when
+ * the most recent loop NEITHER raised mean confidence (by more than `confidenceEpsilon`) NOR reduced
+ * the total named-gap (missingEvidence) count versus the prior loop — the last retrieval bought
+ * nothing, so repeating it is futile. Fewer than two debated loops → false (never cut on the first
+ * pass). Pure/deterministic; the outer-loop analogue of debateMovement.
+ */
+export function diminishingReturns(questionClaims: Claim[], confidenceEpsilon: number): boolean {
+  const byLoop = new Map<number, Claim[]>();
+  for (const c of questionClaims) {
+    const arr = byLoop.get(c.loopIteration);
+    if (arr) arr.push(c);
+    else byLoop.set(c.loopIteration, [c]);
+  }
+  const loops = [...byLoop.keys()].sort((a, b) => b - a);
+  if (loops.length < 2) return false;
+  const now = byLoop.get(loops[0])!;
+  const prev = byLoop.get(loops[1])!;
+  const mean = (cs: Claim[]) => cs.reduce((s, c) => s + c.confidence, 0) / cs.length;
+  const gaps = (cs: Claim[]) => cs.reduce((s, c) => s + c.missingEvidence.length, 0);
+  const improved = mean(now) > mean(prev) + confidenceEpsilon;
+  const gapsReduced = gaps(now) < gaps(prev);
+  return !improved && !gapsReduced;
+}
+
 export async function allocateBudget(
   state: ResearchStateT
 ): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; gateScores: GateScore[] }> {
@@ -56,6 +84,40 @@ export async function allocateBudget(
 
   const unresolved = state.questions.filter(q => !q.resolved);
 
+  // Diminishing-returns shut-off (past loop 0): a question whose last targeted retrieval neither
+  // raised confidence nor closed a gap won't be helped by more retrieval — resolve it here (zero LLM
+  // cost) and let synthesis report the persistent gap, instead of re-spending to reconfirm an
+  // unfillable one. Takes precedence over contention routing (which would keep routing an evidential
+  // gap to the LLM gate loop after loop).
+  const diminishingResolved: GateScore[] = [];
+  const diminishingIds = new Set<string>();
+  if (state.loopIteration > 0) {
+    for (const q of unresolved) {
+      const qClaims = state.claims.filter(c => c.questionId === q.id);
+      if (diminishingReturns(qClaims, LOOP_CONFIDENCE_EPSILON)) {
+        const latestLoop = Math.max(...qClaims.map(c => c.loopIteration));
+        const gapCount = qClaims
+          .filter(c => c.loopIteration === latestLoop)
+          .reduce((s, c) => s + c.missingEvidence.length, 0);
+        diminishingResolved.push({
+          questionId: q.id,
+          retrieve: false,
+          gapCount,
+          confidenceSpread: 0,
+          reason: "diminishing returns — retrieval did not raise confidence or close the gap",
+        });
+        diminishingIds.add(q.id);
+      }
+    }
+  }
+
+  if (diminishingResolved.length) {
+    getActiveTrace()?.log("gate:diminishing", {
+      loopIteration: state.loopIteration,
+      questionIds: [...diminishingIds],
+    });
+  }
+
   // --- Contention routing (D5): the marginal-utility shut-off on the retrieval loop ---
   // For each unresolved question, read the surviving disagreements from its debate transcript.
   // A question whose contentions are all INTERPRETIVE (roles read the same evidence differently)
@@ -64,7 +126,7 @@ export async function allocateBudget(
   // contention (a named gap) — or no transcript yet (route === null) — reach the LLM gate below.
   const contentionsByQuestion = new Map<string, Contention[]>();
   const contentionResolved: GateScore[] = [];
-  for (const q of unresolved) {
+  for (const q of unresolved.filter(q => !diminishingIds.has(q.id))) {
     const rounds = state.debateTranscripts[q.id];
     const finalRound = rounds?.[rounds.length - 1];
     if (!finalRound) continue; // no debate transcript → defer to the LLM gate (route null)
@@ -93,24 +155,26 @@ export async function allocateBudget(
     })),
   });
 
-  const contentionResolvedIds = new Set(contentionResolved.map(s => s.questionId));
-  const gateQuestions = unresolved.filter(q => !contentionResolvedIds.has(q.id));
+  const zeroCostResolved = [...diminishingResolved, ...contentionResolved];
+  const zeroCostResolvedIds = new Set(zeroCostResolved.map(s => s.questionId));
+  const gateQuestions = unresolved.filter(q => !zeroCostResolvedIds.has(q.id));
 
-  // Every unresolved question resolved by contention routing → converge with NO LLM gate call.
+  // Every unresolved question resolved at zero LLM cost (diminishing + contention) → converge with
+  // NO LLM gate call.
   if (gateQuestions.length === 0) {
     getActiveTrace()?.log("gate:converged", {
-      reason: "contention-resolved",
+      reason: "zero-cost-resolved",
       loopIteration: state.loopIteration,
       budgetRemaining: state.budgetRemaining,
     });
     const questions = state.questions.map(q =>
-      contentionResolvedIds.has(q.id) ? { ...q, resolved: true } : q,
+      zeroCostResolvedIds.has(q.id) ? { ...q, resolved: true } : q,
     );
     return {
       state: { ...state, questions, converged: true },
       continueLoop: false,
       usage: [],
-      gateScores: contentionResolved,
+      gateScores: zeroCostResolved,
     };
   }
 
@@ -204,9 +268,9 @@ Return a decision for every question ID listed above.`;
     );
   }
 
-  // Fold in the contention-resolved questions (retrieve:false) so the report and the
-  // questions map below see them alongside the LLM gate's decisions.
-  gateScores = [...gateScores, ...contentionResolved];
+  // Fold in the zero-cost-resolved questions (diminishing + contention, all retrieve:false) so the
+  // report and the questions map below see them alongside the LLM gate's decisions.
+  gateScores = [...gateScores, ...zeroCostResolved];
 
   const continueLoop = gateScores.some(d => d.retrieve);
 

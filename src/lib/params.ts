@@ -65,6 +65,10 @@ export const MAX_LOOP_ITERATIONS   = 5;
 export const TOTAL_FIRECRAWL_BUDGET = 80;
 export const MAX_RUN_COST_USD      = 2.00;
 
+// A question is in diminishing returns when its most recent retrieval loop raised mean committee
+// confidence by no more than this AND did not reduce its named-gap count — more retrieval is futile.
+export const LOOP_CONFIDENCE_EPSILON = 0.05;
+
 // -- Orchestration: token efficiency -----------------------------------------
 
 export const MAX_EVIDENCE_CHARS_PER_AGENT = 30_000;
