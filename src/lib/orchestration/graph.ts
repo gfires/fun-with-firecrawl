@@ -668,8 +668,9 @@ const AnswerSchema = z.object({
     .string()
     .describe(
       "the final adjudication written at the objective's altitude (landscape map for a survey; " +
-        "graded go/no-go + fault lines for a decision), grounded STRICTLY in the committee claims " +
-        "and contentions given — introduce no new facts and cite no new sources",
+        "graded go/no-go + fault lines for a decision), grounded in the committee claims, the " +
+        "surviving contentions, AND the cited SOURCES — cite specific evidence by its [S#] label for " +
+        "every concrete figure/name/finding; invent no facts and cite no [S#] not listed",
     ),
 });
 
@@ -694,14 +695,47 @@ export async function answerObjective(
 
   const costTracker = getActiveCostTracker();
 
-  // Grounding, per question: the committee's FINAL-round positions and any surviving contention.
-  // Pulled from the debate transcript when present (the durable final round), else the raw claims.
+  // Evidence the committee actually CITED, threaded back so the final answer can ground and cite each
+  // figure in a real source. Claims carry supporting/contradicting evidence ids, but the answer step
+  // used to see only the prose conclusions and was told to "cite no sources" — breaking the
+  // traceability chain at the last step and forcing broad, unsourced assertions. We map the cited ids
+  // to short, stable [S#] labels + the digest's distilled facts (falling back to the search snippet),
+  // list them once as SOURCES with their url, and tag each claim with the labels it rests on. Only
+  // CITED evidence is included — the vetted set — which keeps the answer grounded and closes the
+  // hallucination surface the old "cite no new sources" guard was protecting.
+  const evidenceById = new Map(state.evidence.map((e) => [e.id, e]));
+  const summaryById = new Map<string, string>();
+  for (const items of Object.values(state.digests ?? {})) {
+    for (const it of items) if (!summaryById.has(it.evidenceId)) summaryById.set(it.evidenceId, it.summary);
+  }
+  const labelById = new Map<string, string>();
+  const orderedSources: { label: string; ev: Evidence }[] = [];
+  const labelFor = (id: string): string | undefined => {
+    const ev = evidenceById.get(id);
+    if (!ev) return undefined; // never mint a label for an id we don't actually hold
+    let label = labelById.get(id);
+    if (!label) {
+      label = `S${orderedSources.length + 1}`;
+      labelById.set(id, label);
+      orderedSources.push({ label, ev });
+    }
+    return label;
+  };
+
+  // Grounding, per question: the committee's FINAL-round positions (tagged with the sources each rests
+  // on) and any surviving contention. Pulled from the debate transcript when present, else raw claims.
   const sections = state.questions.map((q) => {
     const rounds = state.debateTranscripts[q.id];
     const finalRound = rounds?.[rounds.length - 1];
     const claims = finalRound ? finalRound.claims : state.claims.filter((c) => c.questionId === q.id);
     const claimLines = claims.length
-      ? claims.map((c) => `    - [${c.agentRole}] (conf ${c.confidence.toFixed(2)}) ${c.conclusion}`).join("\n")
+      ? claims.map((c) => {
+          const cites = [...new Set([...c.supportingEvidenceIds, ...c.contradictingEvidenceIds])]
+            .map(labelFor)
+            .filter(Boolean);
+          const tag = cites.length ? `  [cites ${cites.join(", ")}]` : "  [no source cited]";
+          return `    - [${c.agentRole}] (conf ${c.confidence.toFixed(2)}) ${c.conclusion}${tag}`;
+        }).join("\n")
       : "    - (no committee claims)";
     const contentions = finalRound ? extractContentions(q.id, finalRound.claims) : [];
     const contentionLines = contentions.length
@@ -709,6 +743,17 @@ export async function answerObjective(
       : "    - (committee aligned — no surviving split)";
     return `  Question ${q.id} (${q.category}): ${q.text}\n  Committee positions:\n${claimLines}\n  Contentions:\n${contentionLines}`;
   });
+
+  // Render SOURCES after the sections map has assigned every [S#] via labelFor. Each carries the
+  // distilled facts (digest summary, else snippet) and the url, so a cited [S#] is fully traceable.
+  const sourceLines = orderedSources.length
+    ? orderedSources
+        .map(({ label, ev }) => {
+          const facts = (summaryById.get(ev.id) ?? ev.snippet ?? "").replace(/\s+/g, " ").trim().slice(0, 400);
+          return `  [${label}] ${ev.title} (${ev.domain})\n      ${facts}\n      ${ev.url}`;
+        })
+        .join("\n")
+    : "  (the committee cited no sources — adjudicate from the positions above and say the evidence base is thin)";
 
   const constraints = state.researchBrief.constraints;
   const constraintsLine = constraints.length ? constraints.join("; ") : "(none stated)";
@@ -719,8 +764,13 @@ export async function answerObjective(
     `OBJECTIVE (write the answer that satisfies THIS): ${objective}`,
     `CONSTRAINTS: ${constraintsLine}`,
     "",
-    "Ground your answer STRICTLY in the committee's claims and contentions below. Introduce NO new",
-    "facts and cite NO new sources — you are adjudicating what the committee already found, not researching.",
+    "Ground your answer in the committee's positions AND the SOURCES below. CITE specific evidence by",
+    "its [S#] label wherever you state a concrete fact, figure, named entity, or outcome — the reader",
+    "must be able to trace every claim to a source. Reach for the specific data in the SOURCES (the",
+    "numbers, names, and findings), not the committee's paraphrase — use the nuance, do not flatten it.",
+    "Do NOT introduce any fact absent from the SOURCES, and NEVER cite an [S#] that is not listed below",
+    "(invent no sources and no figures). Where the committee named a GAP (a claim with no source cited),",
+    "say what specific evidence is missing rather than papering over it.",
     "",
     "Match the objective's ALTITUDE:",
     "- a broad survey → a landscape map: the shape of the opportunity across the questions.",
@@ -729,8 +779,11 @@ export async function answerObjective(
     "Wherever the committee split, say so explicitly and name whether the split is EVIDENTIAL (a gap more",
     "evidence could close) or INTERPRETIVE (the roles read the same evidence differently) — do not paper over it.",
     "",
-    "COMMITTEE FINDINGS:",
+    "COMMITTEE FINDINGS (each position tagged with the [S#] sources it rests on):",
     ...sections,
+    "",
+    "SOURCES (cite these by [S#]; each is a real retrieved source with its distilled findings and url):",
+    sourceLines,
   ].join("\n");
 
   // The final answer is non-negotiable and must never ship truncated. Bound the request with an

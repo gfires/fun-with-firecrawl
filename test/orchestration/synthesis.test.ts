@@ -85,8 +85,59 @@ describe("answerObjective (A5)", () => {
     expect(prompt).toContain("prior entrants all died on distribution"); // a committee claim
     expect(prompt).toContain("SPLIT (interpretive)"); // the surviving contention, classified
     expect(prompt).toContain("US market"); // constraint carried through
-    // Strictly grounded: the prompt forbids new facts/sources.
-    expect(prompt).toContain("Introduce NO new");
+    // Grounded + traceable: the prompt requires citing [S#] and forbids inventing sources.
+    expect(prompt).toContain("CITE specific evidence by");
+    expect(prompt).toContain("NEVER cite an [S#] that is not listed");
+  });
+
+  it("threads the CITED evidence into the prompt as [S#] sources and tags each claim with its sources", async () => {
+    (generateText as Mock).mockResolvedValue(fakeGenResult({ answer: "Lean no-go [S1]." }));
+    const ev = {
+      id: "ev-abc",
+      url: "https://example.com/report",
+      domain: "example.com",
+      title: "Freight margins report",
+      snippet: "gross margins run 3-5% for brokerages",
+      content: "full content",
+      sourceQuery: "freight",
+      loopIteration: 0,
+      contentHash: "h",
+    };
+    const cited = claim("operator", { conclusion: "margins are thin", supportingEvidenceIds: ["ev-abc"] });
+    const state = stateOf({
+      questions: [q("q1")],
+      claims: [cited],
+      debateTranscripts: { q1: [{ round: 0, claims: [cited] }, { round: 1, claims: [cited] }] },
+      evidence: [ev],
+      digests: { q1: [{ evidenceId: "ev-abc", summary: "brokerage gross margins 3-5%, high fragmentation" }] },
+    } as never);
+
+    await answerObjective(state);
+    const prompt = (generateText as Mock).mock.calls[0][0].prompt as string;
+    // A SOURCES block with the source labelled [S1], its distilled digest facts, and its url.
+    expect(prompt).toContain("SOURCES (cite these by [S#]");
+    expect(prompt).toContain("[S1] Freight margins report");
+    expect(prompt).toContain("brokerage gross margins 3-5%"); // distilled facts, not just the paraphrase
+    expect(prompt).toContain("https://example.com/report"); // traceable url
+    // The claim line is tagged with the source it rests on.
+    expect(prompt).toContain("[cites S1]");
+  });
+
+  it("never mints a label for an evidence id the state does not actually hold (no hallucinated sources)", async () => {
+    (generateText as Mock).mockResolvedValue(fakeGenResult({ answer: "no-go" }));
+    // Claim cites an id with NO matching evidence in state → no [S#], tagged as uncited.
+    const dangling = claim("skeptic", { conclusion: "no demand", supportingEvidenceIds: ["ghost-id"] });
+    const state = stateOf({
+      questions: [q("q1")],
+      claims: [dangling],
+      debateTranscripts: { q1: [{ round: 0, claims: [dangling] }, { round: 1, claims: [dangling] }] },
+      evidence: [],
+    } as never);
+
+    await answerObjective(state);
+    const prompt = (generateText as Mock).mock.calls[0][0].prompt as string;
+    expect(prompt).not.toContain("[S1]");
+    expect(prompt).toContain("[no source cited]");
   });
 
   it("bounds the deliverable with an explicit output-token ceiling (anti-truncation)", async () => {
