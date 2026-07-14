@@ -41,10 +41,13 @@ export const MAX_BRIEF_CONSTRAINTS = 8;
 // -- Orchestration: decompose ------------------------------------------------
 
 export const MIN_QUESTIONS         = 3;
-export const MAX_QUESTIONS         = 5;
+// 4 covers a go/no-go's core facets while keeping loop-0 retrieval spend low enough that a second
+// loop fits under the Firecrawl budget (5 questions × 2 queries blew the whole budget in one loop).
+export const MAX_QUESTIONS         = 4;
 // Keyword search queries decompose emits per question (used verbatim by retrieve instead of the
-// full question sentence, which searches poorly). Clamped in code — LLM output carries no max.
-export const MAX_SEARCH_QUERIES_PER_QUESTION = 3;
+// full question sentence, which searches poorly). ONE broad query per question at loop 0 halves
+// search spend; refine adds a sharper gap-targeted query on loop 1. Clamped in code (no schema max).
+export const MAX_SEARCH_QUERIES_PER_QUESTION = 1;
 
 // -- Orchestration: retrieve -------------------------------------------------
 
@@ -108,8 +111,9 @@ export const REDEBATE_ROLE_MODEL_IDS: Record<AgentRoleT, string> = {
 // -- Orchestration: debate (inner loop, Wave 3) ------------------------------
 
 // The committee is a real debate, not a poll: round 0 is the independent opening, then
-// conversational rounds until positions stop moving or this cap is hit (round 0 excluded).
-export const MAX_DEBATE_ROUNDS = 3;
+// conversational rounds until positions stop moving or this cap is hit (round 0 excluded). Capped at
+// 2 rebuttal rounds — traces show the verdict is stable by round 2; round 3 was mostly churn.
+export const MAX_DEBATE_ROUNDS = 2;
 // The skeptic (the antagonist that keeps the Sonnet trio honest) stays on gpt-4o through this
 // debate round, then drops to gpt-4o-mini — by the late rounds we're closing, not breaking ground.
 export const DEBATE_SKEPTIC_STRONG_ROUNDS = 2;

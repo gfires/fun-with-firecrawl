@@ -215,9 +215,9 @@ const DecompositionSchema = z.object({
         searchQueries: z
           .array(z.string())
           .describe(
-            "1-2 SHORT keyword search queries (NOT the full question sentence) that would surface " +
-              'the best public evidence — e.g. "mid-market law firm AI contract review pricing". Use ' +
-              "the space's real jargon and named tools; a long natural-language question searches poorly.",
+            "ONE short keyword search query (NOT the full question sentence) that would surface the " +
+              'best public evidence — e.g. "mid-market law firm AI contract review pricing". Use the ' +
+              "space's real jargon and named tools; a long natural-language question searches poorly.",
           ),
       }),
     )
@@ -262,8 +262,8 @@ export async function decompose(state: ResearchStateT): Promise<Partial<Research
     "If (and only if) the objective is a broad survey with no sharper ask, default to covering the",
     "core facets: market, customers, competition, economics, risks.",
     "",
-    "For EACH question also give 1–2 SHORT keyword search queries (not the sentence) — the literal",
-    "strings we will search — using the space's real jargon, named tools, and specifics.",
+    "For EACH question also give ONE short keyword search query (not the sentence) — the literal",
+    "string we will search — using the space's real jargon, named tools, and specifics.",
   ].join("\n");
 
   const { output: object, usage } = await generateText({

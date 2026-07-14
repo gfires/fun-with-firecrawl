@@ -75,15 +75,15 @@ describe("decompose (objective-driven)", () => {
 
   it("asks for keyword search queries and threads them onto each question", async () => {
     // #2: retrieve prefers Question.searchQueries over the verbose question sentence (which searches
-    // poorly). decompose now emits short keyword queries per question in the same LLM call.
+    // poorly). decompose now emits a keyword query per question in the same LLM call, clamped to
+    // MAX_SEARCH_QUERIES_PER_QUESTION (1 — one broad query at loop 0; refine adds a sharper one later).
     mockQuestions(2, { searchQueries: ["mid-market law firm AI review pricing", "legal AI cost per seat"] });
     const out = await decompose(stateOf(fallbackBrief("legal AI")));
 
-    expect(lastPrompt()).toContain("keyword search queries");
-    expect(out.questions![0].searchQueries).toEqual([
-      "mid-market law firm AI review pricing",
-      "legal AI cost per seat",
-    ]);
+    expect(lastPrompt()).toContain("keyword search query");
+    expect(out.questions![0].searchQueries).toEqual(
+      ["mid-market law firm AI review pricing", "legal AI cost per seat"].slice(0, MAX_SEARCH_QUERIES_PER_QUESTION),
+    );
   });
 
   it("clamps searchQueries per question to MAX_SEARCH_QUERIES_PER_QUESTION", async () => {
@@ -104,6 +104,8 @@ describe("decompose (objective-driven)", () => {
     const out = await decompose(stateOf(fallbackBrief("widgets")));
     expect(out.questions).toHaveLength(MAX_QUESTIONS);
     expect(out.questions!.every((q) => q.confidence === 0 && !q.resolved)).toBe(true);
-    expect(out.questions!.map((q) => q.id)).toEqual(["q1", "q2", "q3", "q4", "q5"]);
+    expect(out.questions!.map((q) => q.id)).toEqual(
+      Array.from({ length: MAX_QUESTIONS }, (_, i) => `q${i + 1}`),
+    );
   });
 });
