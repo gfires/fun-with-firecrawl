@@ -32,7 +32,7 @@ import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel, gateModel } from "../models/provider";
 import { type ArmResult, type AnnotatedUsage, toAnnotatedUsage, rollupTokens, estimateCostUsd } from "./eval";
-import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
+import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, MAX_LOOP_SPEND_FRACTION, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
 import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
@@ -326,15 +326,31 @@ async function retrieve(
   if (questions.length === 0) return { newEvidenceCount: 0 };
   let queries = queriesToSearch(questions, state.searchedQueries);
   if (queries.length === 0) return { newEvidenceCount: 0 };
-  // Each search query costs ~2 credits; cap so search alone doesn't blow the budget.
-  const maxQueries = Math.max(1, Math.floor(state.budgetRemaining / 4));
+
+  // Results scraped per query this pass. Single seam for the loop-0-reconnaissance depth split
+  // (layer 2): keep this the only place the per-pass `k` is chosen so the budget estimate below
+  // and the search() call below stay consistent.
+  const k = RESULTS_PER_QUESTION;
+
+  // Reserve budget across the outer loop (layer 1): cap this pass at MAX_LOOP_SPEND_FRACTION of the
+  // run's INITIAL Firecrawl budget, so the broad first pass can't drain the pool and starve the
+  // gap-targeted passes (where evidence has the highest marginal value). initialBudget is
+  // reconstructed from the additive remaining+spent deltas. Each query costs ~1 search (2 credits)
+  // plus up to `k` scrapes; cap the query count so this pass's worst-case spend fits the loop budget.
+  const initialBudget = state.budgetRemaining + state.budgetSpent;
+  const loopBudget = Math.min(
+    state.budgetRemaining,
+    Math.max(1, Math.ceil(initialBudget * MAX_LOOP_SPEND_FRACTION)),
+  );
+  const estCreditsPerQuery = 2 + k;
+  const maxQueries = Math.max(1, Math.floor(loopBudget / estCreditsPerQuery));
   if (queries.length > maxQueries) queries = queries.slice(0, maxQueries);
   // Under streamMode "custom", config.writer forwards live search/scrape progress
   // to the SSE transport (graph-stream.ts). Absent (graph.invoke) → no emission.
   const writer = config?.writer;
   const { evidence, searchCredits, scrapeCredits, triageUsage } = await search(
     queries,
-    RESULTS_PER_QUESTION,
+    k,
     state.loopIteration,
     writer ? (progress) => writer({ node: "retrieve", progress }) : undefined,
     // Relevance context for triage: the subject grounds "is this candidate on-topic?".

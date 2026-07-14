@@ -68,6 +68,15 @@ export const MAX_LOOP_ITERATIONS   = 5;
 export const TOTAL_FIRECRAWL_BUDGET = 80;
 export const MAX_RUN_COST_USD      = 2.00;
 
+// Budget reservation across the retrieval loop: no single retrieve pass may spend more than this
+// fraction of the run's INITIAL Firecrawl budget. The broad first pass has low marginal value per
+// credit (you don't yet know what's missing); the gap-targeted passes after a debate have high value
+// (the committee named the gap). Without a per-pass ceiling, loop 0 greedily drains the pool and the
+// targeted passes — the whole point of the outer loop — never run (observed: a run that reached loop
+// 0, produced 7 evidential gaps, then converged on "budget" with zero further retrieval). At the
+// default budget this still covers every question at loop 0 while reserving half for the refined passes.
+export const MAX_LOOP_SPEND_FRACTION = 0.5;
+
 // A question is in diminishing returns when its most recent retrieval loop raised mean committee
 // confidence by no more than this AND did not reduce its named-gap count — more retrieval is futile.
 export const LOOP_CONFIDENCE_EPSILON = 0.05;
