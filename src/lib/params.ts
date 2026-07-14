@@ -75,7 +75,19 @@ export const MIN_TRIAGE_SCORE      = 4;
 
 export const MAX_LOOP_ITERATIONS   = 5;
 export const TOTAL_FIRECRAWL_BUDGET = 80;
-export const MAX_RUN_COST_USD      = 2.00;
+// Hard USD cap on a run's LLM spend, enforced by the cost tracker (check() before each gated call).
+// The final objective-level ANSWER is EXEMPT (it records cost but never gates) — the deliverable is
+// non-negotiable and always gets written, even on a run that hit this cap. So a run's total can land
+// slightly above this: ~this much deliberation + the exempt answer on top.
+export const MAX_RUN_COST_USD      = 0.75;
+
+// Output-token ceiling for the synthesis ANSWER call (the final deliverable). Left unset, the AI SDK
+// sends the model's 128k default max_tokens; a non-streaming request at that ceiling is the classic
+// truncation trap, and on a complex committee input Sonnet 5's adaptive thinking (which cannot be
+// budget-capped on this model) can eat the visible answer. This bounds the request generously — far
+// above thinking + a full multi-fault-line adjudication (~2k tokens observed) — so the answer always
+// completes; answerObjective additionally retries once if the model still reports a length cut.
+export const SYNTHESIS_ANSWER_MAX_TOKENS = 16000;
 
 // Budget reservation across the retrieval loop: no single retrieve pass may spend more than this
 // fraction of the run's INITIAL Firecrawl budget. The broad first pass has low marginal value per

@@ -7,6 +7,7 @@ import type { ResearchStateT, Question } from "@/lib/schemas/state";
 import type { AgentRoleT, Claim, DebateResponse } from "@/lib/schemas/claim";
 import type { DebateRound } from "@/lib/orchestration/debate";
 import { fakeGenResult, assertNoLlmCalls } from "../helpers/mock-ai";
+import { SYNTHESIS_ANSWER_MAX_TOKENS } from "@/lib/params";
 
 vi.mock("ai", async () => {
   const actual = await vi.importActual<typeof import("ai")>("ai");
@@ -86,6 +87,34 @@ describe("answerObjective (A5)", () => {
     expect(prompt).toContain("US market"); // constraint carried through
     // Strictly grounded: the prompt forbids new facts/sources.
     expect(prompt).toContain("Introduce NO new");
+  });
+
+  it("bounds the deliverable with an explicit output-token ceiling (anti-truncation)", async () => {
+    (generateText as Mock).mockResolvedValue(fakeGenResult({ answer: "Lean no-go." }));
+    await answerObjective(stateOf());
+    // The 128k default max_tokens is the non-streaming truncation trap — the answer call must cap it.
+    expect((generateText as Mock).mock.calls[0][0].maxOutputTokens).toBe(SYNTHESIS_ANSWER_MAX_TOKENS);
+  });
+
+  it("retries once and returns the COMPLETE answer when the first attempt is length-truncated", async () => {
+    // The deliverable is non-negotiable: a finishReason "length" cut must not ship.
+    (generateText as Mock)
+      .mockResolvedValueOnce({ ...fakeGenResult({ answer: "VERDICT: NOT YET. Fault line 1 is" }), finishReason: "length" })
+      .mockResolvedValueOnce({ ...fakeGenResult({ answer: "VERDICT: NOT YET. Full adjudication, all four fault lines." }), finishReason: "stop" });
+
+    const out = await answerObjective(stateOf());
+    expect((generateText as Mock)).toHaveBeenCalledTimes(2);
+    expect(out.answer).toBe("VERDICT: NOT YET. Full adjudication, all four fault lines.");
+  });
+
+  it("keeps the fuller partial if BOTH attempts truncate (best effort, never blank)", async () => {
+    (generateText as Mock)
+      .mockResolvedValueOnce({ ...fakeGenResult({ answer: "short partial" }), finishReason: "length" })
+      .mockResolvedValueOnce({ ...fakeGenResult({ answer: "a noticeably longer partial answer" }), finishReason: "length" });
+
+    const out = await answerObjective(stateOf());
+    expect((generateText as Mock)).toHaveBeenCalledTimes(2);
+    expect(out.answer).toBe("a noticeably longer partial answer");
   });
 
   it("skips the call and returns an empty answer when the objective is empty", async () => {

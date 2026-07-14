@@ -32,7 +32,7 @@ import type { Evidence } from "../schemas/evidence";
 import type { Claim } from "../schemas/claim";
 import { managerModel, gateModel } from "../models/provider";
 import { type ArmResult, type AnnotatedUsage, toAnnotatedUsage, rollupTokens, estimateCostUsd } from "./eval";
-import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, RECON_RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, MAX_LOOP_SPEND_FRACTION, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
+import { MIN_QUESTIONS, MAX_QUESTIONS, MAX_BRIEF_CONSTRAINTS, MAX_SEARCH_QUERIES_PER_QUESTION, RESULTS_PER_QUESTION, RECON_RESULTS_PER_QUESTION, TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS, MAX_LOOP_SPEND_FRACTION, SYNTHESIS_ANSWER_MAX_TOKENS, DIGEST_ENABLED, LLM_MAX_RETRIES } from "../params";
 import { getActiveTrace, startTrace } from "./trace";
 import { getActiveCostTracker, runWithCostTracker, BudgetExceededError } from "./cost-tracker";
 
@@ -733,23 +733,40 @@ export async function answerObjective(
     ...sections,
   ].join("\n");
 
-  try {
-    const { output: object, usage } = await generateText({
-      model: gateModel,
-      output: Output.object({ schema: AnswerSchema }),
-      prompt,
-      maxRetries: LLM_MAX_RETRIES,
-    });
-    const annotated = toAnnotatedUsage(usage, gateModel.modelId, "synthesis:answer");
-    costTracker?.record({ model: gateModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
-    getActiveTrace()?.logLlmCall("synthesis:answer", { model: gateModel.modelId, prompt }, object, usage);
-    return { answer: object.answer, usage: annotated };
-  } catch (err) {
-    getActiveTrace()?.log("synthesis_answer_failed", {
-      message: err instanceof Error ? err.message : String(err),
-    });
-    return { answer: "" };
+  // The final answer is non-negotiable and must never ship truncated. Bound the request with an
+  // explicit ceiling (SYNTHESIS_ANSWER_MAX_TOKENS) so the model's 128k default can't trigger a
+  // non-streaming truncation, keep adaptive thinking on (disabling it degrades the adjudication), and
+  // retry ONCE if the model still reports finishReason "length". Every attempt books cost — the answer
+  // is exempt from the run's cap (record but never check), so this always runs and always completes.
+  let best: { answer: string; usage: AnnotatedUsage } | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { output: object, usage, finishReason } = await generateText({
+        model: gateModel,
+        output: Output.object({ schema: AnswerSchema }),
+        prompt,
+        maxOutputTokens: SYNTHESIS_ANSWER_MAX_TOKENS,
+        maxRetries: LLM_MAX_RETRIES,
+      });
+      const annotated = toAnnotatedUsage(usage, gateModel.modelId, "synthesis:answer");
+      costTracker?.record({ model: gateModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+      getActiveTrace()?.logLlmCall("synthesis:answer", { model: gateModel.modelId, prompt }, object, usage);
+      const result = { answer: object.answer, usage: annotated };
+      if (finishReason !== "length") return result; // complete
+      // Truncated despite the generous ceiling (near-pathological, or a transient length cut): retry,
+      // keeping the fuller partial in case the second attempt is no better.
+      getActiveTrace()?.log("synthesis_answer_truncated", { attempt, chars: object.answer.length });
+      if (!best || result.answer.length > best.answer.length) best = result;
+    } catch (err) {
+      getActiveTrace()?.log("synthesis_answer_failed", {
+        attempt,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      if (best) return best; // a prior attempt produced usable text
+      return { answer: "" };
+    }
   }
+  return best ?? { answer: "" };
 }
 
 /**
