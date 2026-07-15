@@ -269,11 +269,7 @@ export async function runResearcher(
     steps += 1;
 
     const annotated = toAnnotatedUsage(res.totalUsage, modelId, `researcher:${question.id}`);
-    getActiveCostTracker()?.record({
-      model: modelId,
-      promptTokens: annotated.promptTokens,
-      completionTokens: annotated.completionTokens,
-    });
+    getActiveCostTracker()?.record(annotated);
     acc.promptTokens += annotated.promptTokens;
     acc.completionTokens += annotated.completionTokens;
     acc.cachedPromptTokens += annotated.cachedPromptTokens ?? 0;

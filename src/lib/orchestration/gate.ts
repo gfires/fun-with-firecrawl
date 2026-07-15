@@ -218,7 +218,7 @@ export async function allocateBudget(
   });
 
   const annotated = toAnnotatedUsage(usage, gateClassifierModel.modelId, "gate");
-  costTracker?.record({ model: gateClassifierModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+  costTracker?.record(annotated);
 
   const trace = getActiveTrace();
   if (trace) {

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { MAX_RUN_COST_USD } from "../params";
 import { estimateCostUsd } from "./eval";
-import type { TokenUsage } from "../events";
+import type { AnnotatedUsage } from "./eval";
 
 export class BudgetExceededError extends Error {
   constructor(spent: number, cap: number) {
@@ -17,6 +17,14 @@ export class BudgetExceededError extends Error {
  * we never estimate a call's cost before it runs. `check()` gates a call by asking
  * "have we already spent the cap?"; `record()` books the exact cost on completion.
  *
+ * SINGLE SOURCE OF TRUTH: `record()` also RETAINS every annotated usage it books
+ * (`getUsages()`). The final report rolls up FROM the tracker, not from `state.llmCalls`,
+ * because LangGraph rolls a super-step's state back to the last checkpoint when a call
+ * throws mid-super-step — dropping already-billed calls from `llmCalls`. The tracker sees
+ * every API-billed call (nothing is rolled back out of it), so its rollup reflects true
+ * spend. Cost is estimated from the FULL annotated usage, so `spent`/the cap and the
+ * rollup are prompt-cache accurate (cached/creation tokens billed at their multipliers).
+ *
  * CONCURRENCY: the graph fans out up to ~20 structured-output LLM calls at once (the
  * committee runs 4 roles × N questions in parallel). `record()` is a plain synchronous
  * `+=`, and JS is single-threaded, so the increments themselves cannot corrupt each
@@ -29,6 +37,7 @@ export class BudgetExceededError extends Error {
 class CostTracker {
   private spent = 0;
   private cap: number;
+  private usages: AnnotatedUsage[] = [];
 
   constructor(cap: number) {
     this.cap = cap;
@@ -41,11 +50,22 @@ class CostTracker {
     }
   }
 
-  /** Book a completed call's exact cost. Returns that cost. */
-  record(usage: TokenUsage): number {
+  /**
+   * Book a completed call's cache-accurate cost AND retain its full annotated usage.
+   * Returns that cost. The retained usages are the report's single source of truth
+   * (`getUsages()`) — they survive a super-step rollback that would drop the call from
+   * `state.llmCalls`.
+   */
+  record(usage: AnnotatedUsage): number {
     const cost = estimateCostUsd(usage);
     this.spent += cost;
+    this.usages.push(usage);
     return cost;
+  }
+
+  /** Every annotated usage booked so far (a copy — callers can't mutate the tracker). */
+  getUsages(): AnnotatedUsage[] {
+    return [...this.usages];
   }
 
   getSpent(): number {

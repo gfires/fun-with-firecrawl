@@ -18,7 +18,7 @@ import type { AnnotatedUsage } from "./eval";
 import type { ResearchEvent, GateScore } from "../research-events";
 import { TOTAL_FIRECRAWL_BUDGET, MAX_LOOP_ITERATIONS } from "../params";
 import { startTrace } from "./trace";
-import { runWithCostTracker, BudgetExceededError } from "./cost-tracker";
+import { runWithCostTracker, getActiveCostTracker, BudgetExceededError } from "./cost-tracker";
 
 export function runGraphStreaming(
   topic: string,
@@ -323,11 +323,19 @@ async function runGraphStreamingInner(
     durationMs: Date.now() - t0,
   });
 
+  // `allLlmCalls` drives the live SSE `research:usage` stream, but the FINAL rollup must come
+  // from the cost tracker: a degraded run rolls the failing super-step's state back to the last
+  // checkpoint, dropping already-billed calls from that array (and from state.llmCalls). The
+  // tracker retains every billed call — including the rolled-back super-step and the answer
+  // (recorded once via answerObjective/ensureAnswer) — so its rollup reflects true spend without
+  // double-counting the answer. Fall back to allLlmCalls only if no tracker is active.
+  const tracker = getActiveCostTracker();
+  const rollupUsages = tracker ? tracker.getUsages() : allLlmCalls;
   const result = {
     arm: "orchestrated" as const,
     topic,
     report,
-    tokens: rollupTokens(allLlmCalls),
+    tokens: rollupTokens(rollupUsages),
     firecrawlCalls: totalFirecrawlCalls,
     firecrawlCredits: totalFirecrawlCredits,
     durationMs: Date.now() - t0,

@@ -412,7 +412,7 @@ describe("runResearcher — interior $-cap propagation", () => {
     await expect(
       runWithCostTracker(async () => {
         // Pre-spend far over the tiny cap; the loop-top check() must throw before any step.
-        getActiveCostTracker()!.record({ model: RESEARCHER_MODEL_ID, promptTokens: 100_000_000, completionTokens: 0 });
+        getActiveCostTracker()!.record({ model: RESEARCHER_MODEL_ID, promptTokens: 100_000_000, completionTokens: 0, label: "pre-spend", costUsd: 0 });
         return runResearcher(q("q7"), "m", 1, new Set(), new PassPool(100));
       }, 0.5),
     ).rejects.toBeInstanceOf(BudgetExceededError);

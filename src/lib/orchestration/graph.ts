@@ -183,7 +183,7 @@ export async function intake(state: ResearchStateT): Promise<Partial<ResearchSta
     });
 
     const annotated = toAnnotatedUsage(usage, managerModel.modelId, "intake");
-    costTracker?.record({ model: managerModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+    costTracker?.record(annotated);
 
     const trace = getActiveTrace();
     if (trace) {
@@ -262,7 +262,7 @@ export async function decompose(state: ResearchStateT): Promise<Partial<Research
   });
 
   const annotated = toAnnotatedUsage(usage, managerModel.modelId, "decompose");
-  costTracker?.record({ model: managerModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+  costTracker?.record(annotated);
 
   const trace = getActiveTrace();
   if (trace) {
@@ -479,8 +479,9 @@ async function retrieveCoded(
   // into the token rollup (it runs outside the LLM-node path, so nothing else records it).
   const llmCalls: AnnotatedUsage[] = [];
   if (triageUsage) {
-    getActiveCostTracker()?.record({ model: triageUsage.model, promptTokens: triageUsage.promptTokens, completionTokens: triageUsage.completionTokens });
-    llmCalls.push({ ...triageUsage, label: "triage", costUsd: estimateCostUsd(triageUsage) });
+    const annotated: AnnotatedUsage = { ...triageUsage, label: "triage", costUsd: estimateCostUsd(triageUsage) };
+    getActiveCostTracker()?.record(annotated);
+    llmCalls.push(annotated);
   }
   // budgetRemaining/budgetSpent reducers are ADDITIVE — return signed deltas, not
   // absolutes. Spending `totalCredits` credits: remaining goes down, spent goes up.
@@ -785,7 +786,7 @@ export async function answerObjective(
         maxRetries: LLM_MAX_RETRIES,
       });
       const annotated = toAnnotatedUsage(usage, gateModel.modelId, "synthesis:answer");
-      costTracker?.record({ model: gateModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+      costTracker?.record(annotated);
       getActiveTrace()?.logLlmCall("synthesis:answer", { model: gateModel.modelId, prompt }, object, usage);
       const result = { answer: object.answer, usage: annotated };
       if (finishReason !== "length") return result; // complete
@@ -989,12 +990,20 @@ async function runGraphInner(
     // string). "coded" retrieval keeps the historical "orchestrated" label so the control arm's data
     // doesn't move; the agentic body reports as "agentic".
     const arm = retrievalMode === "agentic" ? "agentic" : "orchestrated";
+    // Roll up FROM the cost tracker, not state.llmCalls: when a run degrades, LangGraph rolls
+    // the failing super-step's state back to the last checkpoint, so its already-billed calls
+    // vanish from finalState.llmCalls and the report undercounts true spend. The tracker retains
+    // every call the APIs billed (including the rolled-back super-step) AND already holds the
+    // answer's usage (answerObjective/ensureAnswer both record it), so we must NOT also concat
+    // answerUsage here — that would double-count the answer. Fall back to llmCalls only if no
+    // tracker is active (never happens under runWithCostTracker, but keeps this total-safe).
+    const tracker = getActiveCostTracker();
+    const usages = tracker ? tracker.getUsages() : [...finalState.llmCalls, ...answerUsage];
     return {
       arm,
       topic,
       report,
-      // Fold in the degrade-path answer's usage — it runs outside the graph, so it's not in llmCalls.
-      tokens: rollupTokens([...finalState.llmCalls, ...answerUsage]),
+      tokens: rollupTokens(usages),
       firecrawlCalls: finalState.firecrawlCalls,
       firecrawlCredits: finalState.firecrawlCredits,
       durationMs: Date.now() - t0,

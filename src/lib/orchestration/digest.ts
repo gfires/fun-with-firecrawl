@@ -121,7 +121,7 @@ export async function digestEvidence(
     });
 
     const annotated = toAnnotatedUsage(usage, digestModel.modelId, `digest:${question.id}`);
-    costTracker?.record({ model: digestModel.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+    costTracker?.record(annotated);
 
     const trace = getActiveTrace();
     if (trace) {

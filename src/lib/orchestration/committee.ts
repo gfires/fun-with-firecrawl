@@ -283,7 +283,7 @@ export async function runCommittee(
     );
 
     const annotated = toAnnotatedUsage(usage, model.modelId, `committee:${role}`);
-    costTracker?.record({ model: model.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+    costTracker?.record(annotated);
 
     const trace = getActiveTrace();
     if (trace) {
@@ -392,7 +392,7 @@ export async function runDebate(
     );
 
     const annotated = toAnnotatedUsage(rawUsage, model.modelId, `debate:${role}`);
-    costTracker?.record({ model: model.modelId, promptTokens: annotated.promptTokens, completionTokens: annotated.completionTokens });
+    costTracker?.record(annotated);
 
     getActiveTrace()?.logLlmCall(`debate:${role}`, { model: model.modelId, loopIteration, debateRound: r, prompt: messages }, object, rawUsage);
 
