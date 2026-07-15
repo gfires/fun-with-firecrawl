@@ -71,7 +71,44 @@ Post-Wave-3 pass: the debate/refine loop was live-verified, then tuned end-to-en
 - **~~Multi-loop run never exercised live.~~ ~~Live-verify the Wave 3 debate.~~** Done — 2026-07-14 runs (contract-review, biomechanical-CV) exercised 3 outer loops with real `debate:round` movement, `debate:contentions`, `final_state.debate` stats, and gap-targeted second/third retrieval passes; the historian cites ids in round 0 (no confabulation). Traces in `trace-output/`.
 - **Live-verify calibration #1 + authoritative voice (A).** Both are committed and reasoned-through but NOT yet run live. A real run should show confidences landing in a more decisive band where proxies warrant it (without overclaiming), fewer wasted "need more evidence" loops on private-data-heavy topics, and an answer that leads with the verdict + `[S#]` citations. Protocol as above; the human runs all live/paid verification.
 - Tune the debate/consensus/movement constants (`MAX_DEBATE_ROUNDS`, `DEBATE_CONSENSUS_*`, `DEBATE_CONFIDENCE_EPSILON`), the budget knobs (`MAX_LOOP_SPEND_FRACTION`, `RECON_RESULTS_PER_QUESTION`, `MAX_RUN_COST_USD`), and the calibration bar from real output.
-- **Decide the agent-vs-workflow question.** Today this is a LangGraph workflow, not autonomous agents (see the Adaptive-economics section's architecture note). If the thesis needs true agency (roles with tools they invoke mid-deliberation, or an orchestrator directing sub-agents), that's a deliberate scope expansion that trades away the cost-control/predictability just built.
+- **~~Decide the agent-vs-workflow question.~~ DECIDED (2026-07-14): go agentic on RETRIEVAL only.** Reviewed via `/plan-eng-review` + adversarial outside voice. See "Next: agentic retrieval" below.
+
+## Next: agentic retrieval (branch `workflow-to-agentic-migration`)
+
+Move the `retrieve` node from code-driven Firecrawl to a bounded **Haiku researcher agent**
+(one per unresolved question, AI-SDK `generateText` + `webSearch`/`readSource` tools +
+`stopWhen`). Delete `refine` (its query-gen becomes the agent's loop-≥1 mission from the
+contested evidential gaps). `gate` stays as the debate-informed VOI guardrail (`gate→retrieve`
+loop-back). **Committee debate + frozen evidence snapshot UNCHANGED** — roles get no tools;
+preserving the frozen snapshot is why we chose this (Option D) over agentic roles. A third
+eval arm (`agentic`, via a `retrievalMode` flag) measures it against the `orchestrated` arm.
+
+Full spec + operational handoff (tracked, travel with the branch): `docs/agentic-retrieval-spec.md`
+and `docs/agentic-retrieval-HANDOFF.md` — a fresh orchestrator reads the HANDOFF first.
+
+**Locked decisions:** split tools (agent replaces triage) · Haiku researcher · one query per
+search step + multi-URL reads · refined head-only (relevance gate on the snippet; `readSource`
+always stores full Evidence; agent sees a 600-char memo) · `Evidence.questionId` scoping ·
+single shared pass-budget pool (FCFS + per-agent `maxSteps`) · `agentic` eval arm.
+
+**Landmines (from the review — don't repeat):**
+1. `scopeEvidenceToQuestions` buckets by `sourceQuery ∈ question.searchQueries`; an agent
+   inventing queries would silently orphan 100% of its evidence → **fix first** with
+   `Evidence.questionId` + scope-by-identity.
+2. `missionForQuestion` must NOT filter claims by `=== loopIteration` (gate increments before
+   the loop-back — the no-op trap `refine` hit at graph.ts:483).
+3. `retrieve` stays the SOLE writer of signed budget deltas; `gate` writes none.
+4. `getActiveCostTracker()?.check()` must run INSIDE the agent loop (node-entry check misses
+   the per-super-step Haiku swarm).
+5. Charge real post-cache credits; seed the pool `min(budgetRemaining, ceil(initial×MAX_LOOP_SPEND_FRACTION))`.
+6. Return `newEvidenceCount` on every path; roll up `totalUsage` across all agent steps.
+
+**Build order (sequential — one lane, shared graph.ts/firecrawl.ts; tsc+vitest+commit gate each):**
+P1 `Evidence.questionId` scoping fix → P2 Firecrawl tool primitives → P3 `researcher.ts`
+(agent + shared pool + interior check + recon floor) → P4 graph rewire (delete refine,
+gate→retrieve, recursion limit) → P5 `agentic` eval arm + live `compare` run.
+
+**Verification:** human runs all paid/live runs (the P5 `npm run compare` is the cost/quality check).
 
 ## Open issues
 
