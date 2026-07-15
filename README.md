@@ -19,14 +19,18 @@ Both graph arms decompose a topic into questions, then run **two nested loops**:
 - **Debate loop (inner)** — for each question a four-agent committee (Historian, Operator, Investor,
   Skeptic) deliberates over a *frozen* evidence snapshot. Round 0 is the **blind opening**: each role
   renders one independent, calibrated claim without seeing the others, so cross-role agreement is real
-  signal and not herding. If the openings genuinely agree, the debate stops there. Otherwise the roles
-  read the full transcript and the challenges aimed at them and **revise across conversational rounds**
+  signal and not herding. Each claim states a categorical **stance** (`supports` / `opposes` /
+  `insufficient`). Conversational rounds run **only when the openings genuinely disagree** — two distinct
+  decisive stances, or a clash over the same evidence id; otherwise the debate stops at the opening.
+  When they do run, the roles read the full transcript and the challenges aimed at them and **revise**
   — rebutting, conceding, extending — conceding only to evidence, never to consensus. The loop stops
   the moment a round moves no position and opens no new rebuttal, or at a hard round cap.
-- **Retrieval loop (outer)** — the only thing that adds evidence. A value-of-information gate reads the
-  disagreements that survived the debate and spends retrieval budget only where a *named evidence gap*
-  could actually settle a dispute. A disagreement with no such gap is interpretive (the roles read the
-  same evidence differently), so it is reported as a fault line rather than chased. This loops until
+- **Retrieval loop (outer)** — the only thing that adds evidence. The committee debates to *resolve*
+  disagreement; agreement is a trigger to **act**, not a dead end. A gate routes each question on its
+  committee stance: a unanimous decisive lean is a settled answer; a *contested* split spends retrieval
+  budget only where a *named evidence gap* could settle it (an interpretive split with no gap is reported
+  as a fault line, not chased); an *insufficient* verdict with a named gap goes back to retrieval to go
+  get it — and if one no-progress loop can't close that gap, it's noted as a limitation. This loops until
   positions converge, no new evidence arrives, or budget runs out.
 
 Preserved disagreement is a first-class output: a committee that "could not agree, and here is the
@@ -143,20 +147,24 @@ topic
    │    Round 0 — blind opening: four independent Claims, no role sees another
    │      Historian (Sonnet 5) precedent · Operator (Sonnet 5) friction ·
    │      Investor  (Sonnet 5) returns   · Skeptic  (GPT-4o) failure modes
-   │    Consensus fast-path — if the openings genuinely agree, stop here (no debate)
+   │    Each claim states a stance (supports/opposes/insufficient)
+   │    Disagreement gate — run rounds only if openings genuinely disagree (hasGenuineDisagreement:
+   │      ≥2 decisive stances OR an id-clash); else stop at the opening
    │    Rounds 1..MAX_DEBATE_ROUNDS — each role sees the full transcript + the challenges
    │      aimed at it and revises (rebut / concede / extend), conceding only to evidence.
    │      Constructive roles drop to Haiku; the skeptic holds gpt-4o then gpt-4o-mini
    │      (modelForDebateRound). The debate stops the moment a round moves nothing.
-   │  Movement, consensus, and contention are computed MECHANICALLY (debate.ts) from the
+   │  Movement, disagreement, and contention are computed MECHANICALLY (debate.ts) from the
    │  committee's own confidences, cited-id sets, and response stances — never a self-
    │  reported score. Each round the 3 Claude roles share a byte-identical system prefix
    │  (L3 cache); gpt-4o is concurrency-capped (L6). Evidence never changes mid-debate.
    │
-   ▼  GATE    (contention routing + VOI)               src/lib/orchestration/gate.ts
-   │  First, per question, read the disagreements that SURVIVED the debate (extractContentions):
-   │    - all-interpretive, or none → RESOLVE here at zero LLM cost, report the fault line
-   │    - any evidential (a named gap that could settle it) → hand to the LLM gate under budget
+   ▼  GATE    (stance routing + VOI)                   src/lib/orchestration/gate.ts
+   │  First, per question, route on the committee STANCE + named gap (questionRoute), zero LLM cost:
+   │    - unanimous supports/opposes → RESOLVE (a settled answer)
+   │    - contested → by contention: interpretive/none → RESOLVE + fault line; evidential → LLM gate
+   │    - insufficient + named gap → RETRIEVE (go get it); no gap → RESOLVE
+   │    - patience=1: an insufficient gap unmoved after one loop (diminishingReturns) → RESOLVE (noted)
    │  The LLM classifier (GPT-4o-mini) then scores the still-open questions on computed signals
    │  (gapCount, confidenceSpread) + claim summaries. Rule-based, not vibe floats:
    │    - First pass defaults YES unless agents agree and no gaps named
@@ -269,11 +277,13 @@ RETRIEVE ─► DIGEST ─► DEBATE ─► GATE ─►(continue: loop back to)�
   opening (which preserves the historian-confabulation fix — a role can't herd toward a claim it never
   saw). Rounds 1..`MAX_DEBATE_ROUNDS` each show a role the full prior transcript plus the challenges
   aimed at it, and it revises — `rebut` / `concede` / `extend` — emitting a `DebateResponse` per peer
-  it engages. The loop **skips entirely on round-0 consensus** and otherwise stops as soon as a round
-  stops moving.
+  it engages. The loop **skips entirely when the openings show no genuine disagreement** and otherwise
+  stops as soon as a round stops moving.
 - **Every debate signal is mechanical, not a vibe float** (`debate.ts`, all pure + unit-tested):
-  `roundOneConsensus` (tight confidence spread, above a floor, no contradiction — genuine agreement,
-  not shared uncertainty), `debateMovement` (a role moved if its confidence shifted past an epsilon or
+  `hasGenuineDisagreement` (≥2 distinct decisive stances, or a clash over the same evidence id — reads
+  direction, not a confidence spread, so a same-confidence supports-vs-opposes split is caught),
+  `committeeStance` (the committee's overall position: contested / supports / opposes / insufficient),
+  `debateMovement` (a role moved if its confidence shifted past an epsilon or
   its cited-id set changed; a rebuttal is "new" only by `from→target` pair identity, never by matching
   the free-text point), and `extractContentions` (a surviving disagreement is `evidential` if either
   side names a `missingEvidence` gap, else `interpretive`). Nothing casts a qualitative judgment into
@@ -365,9 +375,10 @@ personas, the confidence calibration, and every node's prompt) lives in one read
 | --- | --- | --- |
 | `MAX_DEBATE_ROUNDS` | `2` | Hard cap on conversational rounds per question (round 0 opening excluded) |
 | `DEBATE_SKEPTIC_STRONG_ROUNDS` | `2` | Skeptic stays gpt-4o through this round, then drops to gpt-4o-mini |
-| `DEBATE_CONSENSUS_SPREAD` | `0.2` | Round-0 fast-path: max−min confidence must be under this to count as agreement |
-| `DEBATE_CONSENSUS_MIN_CONFIDENCE` | `0.6` | Round-0 fast-path: every role must be at/above this (rules out shared uncertainty) |
 | `DEBATE_CONFIDENCE_EPSILON` | `0.05` | A confidence move at or below this counts as "no movement" for convergence |
+| `LOOP_CONFIDENCE_EPSILON` | `0.05` | Outer-loop patience: a retrieval that raises mean confidence by ≤ this AND closes no gap is diminishing (→ resolve) |
+
+(Whether to run conversational rounds is a stance decision — `hasGenuineDisagreement` — not a confidence-spread threshold; the old `DEBATE_CONSENSUS_SPREAD` / `DEBATE_CONSENSUS_MIN_CONFIDENCE` knobs were removed.)
 
 Model assignments for committee roles are in [`src/lib/models/provider.ts`](src/lib/models/provider.ts)
 (`modelForRole` for the opening, `modelForDebateRound` for conversational rounds).
@@ -458,8 +469,9 @@ control" above for the full mechanism list). In short:
 - *Outer retrieval loop*: `MAX_LOOP_ITERATIONS` (5), Firecrawl budget exhaustion, the LLM cost cap, or
   a zero-progress loop (`newEvidenceCount === 0` → `gateShortCircuit` no-progress) — plus the
   `routeAfterGate` `budgetRemaining > 0` guard. Whichever hits first.
-- *Debate loop*: round-0 consensus fast-path, movement-based early stop (a round that moves no
-  position is terminal), or the `MAX_DEBATE_ROUNDS` cap.
+- *Debate loop*: the openings show no genuine disagreement (`hasGenuineDisagreement` false → skip the
+  rounds), movement-based early stop (a round that moves no position is terminal), or the
+  `MAX_DEBATE_ROUNDS` cap.
 - *Each researcher agent* (agentic arm): `MAX_AGENT_STEPS`, the shared `PassPool` exhausting, the
   interior cost check throwing, or the model deciding it has enough — subject to the loop-0
   `RECON_FLOOR` minimum (which re-drives an early stop once but is itself bounded by the three above,

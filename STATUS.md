@@ -4,7 +4,7 @@ Running log of what's built and what's left. Stable reference (architecture, key
 
 ## What this is
 
-Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) holds a real debate over a frozen evidence snapshot — round 0 is the independent blind opening, then (unless the openings agree) the roles read each other's positions and revise across conversational rounds until they stop moving (Wave 3) — and a VOI gate routes the surviving disagreements, resolving interpretive ones and spending retrieval budget only on evidential gaps. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
+Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) holds a real debate over a frozen evidence snapshot — round 0 is the independent blind opening (each claim carries a categorical `stance`), then (only when the openings show genuine disagreement — ≥2 decisive stances or an id-clash) the roles read each other's positions and revise across conversational rounds until they stop moving (Wave 3). The committee debates to resolve disagreement; agreement is a trigger to ACT. A gate routes each question on its committee stance: settle a unanimous lean, route a `contested` split by contention (interpretive → fault line, evidential → retrieve), send an `insufficient`+named-gap back to retrieval (and note it as a limitation if a no-progress loop can't close it). Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
 
 ## Wave 2 — token-efficiency overhaul (branch `wave-2-tokens`, ships to `visualization`)
 
@@ -70,7 +70,7 @@ Post-Wave-3 pass: the debate/refine loop was live-verified, then tuned end-to-en
 - **Re-run "freight brokerage" to confirm the historian fix live.** The 2026-07-13 trace (budget 50) showed the historian confabulating "no evidence" on 2 of 4 questions; the anchor + persona fix is committed but only unit-verified. Next trace should show the historian citing ≥1 id whenever the block is non-empty.
 - **~~Multi-loop run never exercised live.~~ ~~Live-verify the Wave 3 debate.~~** Done — 2026-07-14 runs (contract-review, biomechanical-CV) exercised 3 outer loops with real `debate:round` movement, `debate:contentions`, `final_state.debate` stats, and gap-targeted second/third retrieval passes; the historian cites ids in round 0 (no confabulation). Traces in `trace-output/`.
 - **Live-verify calibration #1 + authoritative voice (A).** Both are committed and reasoned-through but NOT yet run live. A real run should show confidences landing in a more decisive band where proxies warrant it (without overclaiming), fewer wasted "need more evidence" loops on private-data-heavy topics, and an answer that leads with the verdict + `[S#]` citations. Protocol as above; the human runs all live/paid verification.
-- Tune the debate/consensus/movement constants (`MAX_DEBATE_ROUNDS`, `DEBATE_CONSENSUS_*`, `DEBATE_CONFIDENCE_EPSILON`), the budget knobs (`MAX_LOOP_SPEND_FRACTION`, `RECON_RESULTS_PER_QUESTION`, `MAX_RUN_COST_USD`), and the calibration bar from real output.
+- Tune the debate/movement constants (`MAX_DEBATE_ROUNDS`, `DEBATE_CONFIDENCE_EPSILON`), the budget knobs (`MAX_LOOP_SPEND_FRACTION`, `RECON_RESULTS_PER_QUESTION`, `MAX_RUN_COST_USD`, `LOOP_CONFIDENCE_EPSILON`), and the calibration bar from real output. (The `DEBATE_CONSENSUS_*` spread/floor knobs are gone — round-running is now a stance decision, see the debate-disagreement section.)
 - **~~Decide the agent-vs-workflow question.~~ DECIDED (2026-07-14): go agentic on RETRIEVAL only.** Reviewed via `/plan-eng-review` + adversarial outside voice. See "Next: agentic retrieval" below.
 
 ## Next: agentic retrieval (branch `workflow-to-agentic-migration`)
@@ -134,8 +134,58 @@ gate→retrieve, recursion limit) → P5 `agentic` eval arm + live `compare` run
 
 **Verification:** human runs all paid/live runs (the P5 `npm run compare` is the cost/quality check).
 
+## Debate only genuine disagreement; route agreement to action (branch `implement-debate-disagreement-spec`)
+
+**Built + live-verified (2026-07-15).** Spec `docs/debate-disagreement-spec.md`. A live agentic run
+had spent ~76% of its budget on deliberation, much of it debating questions where the roles already
+AGREED (e.g. all four independently concluding "no data, can't assess" and then running a multi-round
+Sonnet debate to restate that). Confidence spread can't detect this — q4-style fault lines split by
+*direction* at near-identical confidence. So disagreement is now read from an explicit **stance**.
+All landed `tsc` clean, **337 → 372 vitest green**, one phase at a time (A→B→C + follow-ups).
+
+- **Phase A — stance + skip on agreement** (`claim.ts`, `debate.ts`, `committee.ts`, `prompts.ts`): every
+  claim carries a categorical `stance` (`supports`/`opposes`/`insufficient`) — a bare `z.enum` (no min/max),
+  clamped in code by `coerceStance` (missing/invalid → abstention). `debate.ts` gains three pure,
+  position-general helpers: `decisiveStances` (stances present minus the abstention), `hasGenuineDisagreement`
+  (≥2 decisive stances OR an id-clash), `committeeStance` (contested / supports / opposes / insufficient).
+  `runDebate` runs conversational rounds only when `hasGenuineDisagreement(round0Claims)` — fully replacing
+  `roundOneConsensus` (deleted, with its orphan `DEBATE_CONSENSUS_*` params). Blind opening, historian-first
+  stagger, movement early-stop, returned shape all preserved. The `idClash` sub-logic was extracted to
+  `idClashBetween` and reused by `extractContentions` (behavior-preserving).
+- **Phase B — route the skipped questions** (`gate.ts`): a skipped (agreeing) question has no debate
+  responses → 0 contentions → the old contention-only gate would `resolve` it, silently turning "we agree we
+  need data → go get it" into "agree → give up." New pure `questionRoute(stance, contentions, hasNamedGap)`:
+  `contested` → existing contention routing; unanimous `supports`/`opposes` → resolve (settled); `insufficient`
+  with a named gap → retrieve (go get it); `insufficient` no gap → resolve. **Patience=1** is enforced upstream
+  by `diminishingReturns` (an insufficient gap that survived one no-progress loop resolves as a structural
+  limitation before stance routing — never chased a third time). Gate still writes no budget delta and reads no
+  `retrievalMode` (mode-agnostic — coded and agentic decide identically).
+- **Phase C — surface wasted debate** (`mechanics.ts`): `RunMechanics.deliberation` gains `questionsDebated`
+  vs `questionsSkipped` (+`skippedByStance` breakdown) and `productiveQuestions` (a role's stance moved
+  round-0→final, or a peer conceded). The report prints `debated N · skipped M (X insufficient→retrieve,
+  Y agreed) · productive P/N` and flags `⚠ K debated but unanimous` when rounds ran yet nothing moved.
+- **Current-year search** (`prompts.ts` `decomposePrompt` + `researcherSystemPrompt`): a live run searched
+  "…market size 2024" in 2026. Inject the real `new Date().getFullYear()` (computed in the node) into both
+  query-authoring prompts — use the current year for market/pricing/vendor/regulation recency, a past year
+  only for genuinely historical questions.
+- **Cost-report fixes** (`mechanics.ts`, `digest.ts`): (a) the RUN MECHANICS effort split forwarded only the
+  legacy top-level `cachedInputTokens` (absent in AI SDK v7) so it billed cache-reads at full price — the split
+  over-stated cost (~$0.76 vs the real $0.72). Now forwards `inputTokenDetails.{cacheReadTokens,cacheWriteTokens,
+  noCacheTokens}`; the split reconciles to the tracker exactly. (b) `formatDigestForCommittee` had NO total cap
+  (unlike `formatEvidence`'s 30K), so the block the whole committee re-reads each call grew unbounded across
+  loops — the biggest avoidable deliberation-input sink. Capped uniformly (byte-identical → L3 cache still hits).
+
+**Live finding (2026-07-15, "freight brokerage vendor management" agentic run, $0.7196):** the skip fired on the
+right question (q3, willingness-to-pay — all four roles independently abstained → skipped → routed to retrieve,
+not resolved); the 3 debated questions were genuinely contested and mapped onto the answer's fault lines;
+`productive 3/3` with no `⚠ debated but unanimous`. Retrieval discriminated (read ~20% of ~80 hits, deduped,
+deepened on loop 1) and escalated where it mattered (loop-1 queries gap-targeted, sharpest on the contested q4),
+then stopped cleanly on `cost-headroom`. Deliberation share ~67% (cache-aware). The re-debate is already
+double-gated (`questionsNeedingDebate` new-evidence gate + Phase A disagreement gate), so the loop-1 spend was
+warranted, not waste — the $ lever scales with how many questions genuinely agree, which is topic-dependent.
+
 ## Open issues
 
 - None blocking. Historian confabulation fix confirmed live (2026-07-14 traces: round-0 claims cite ids). Previous schema-crash, silent-retrieve, and cost-overcount issues resolved — see Done / Wave 2.
-- **Known-but-not-blocking — prompt caching is largely inert (~7% of input served from cache).** The cross-round caching win doesn't materialize in practice: re-debates run on Haiku (4096-token cache floor the digested blocks don't clear) and the stall-exit removes most round-2s (where cross-round reuse would occur); committee openings fall below Anthropic's per-model minimum because the digest shrinks them. Not worth chasing — the digest and the Haiku tier each save more than the forfeited cache; the real cost driver is re-debating across loops.
+- **Known-but-not-blocking — prompt caching is modest in practice (~12% of input served from cache; measured 2026-07-15).** The cross-round win is partial: re-debates run on Haiku (4096-token cache floor the digested blocks don't clear) and the stall-exit removes most round-2s (where cross-round reuse would occur); committee openings fall below Anthropic's per-model minimum because the digest shrinks them. On committee+debate the stagger DOES hit at a healthy ~2:1 read:write ratio, so it's not inert — just capped by the above. Not worth chasing — the digest and the Haiku tier each save more than the forfeited cache; the real cost driver is re-debating across loops. (Both the live cost tracker AND the RUN MECHANICS effort split are now cache-aware — see the debate-disagreement section.)
 - **Structural ceiling — decision-critical B2B data is often non-public.** Web search can't surface competitor ARR/churn, WTP, procurement specifics, or proprietary thresholds; calibration #1 makes the committee reason from proxies instead of chasing these, but a truly authoritative answer on unit economics would need proprietary sources (PitchBook/Crunchbase-style data, expert interviews). A known boundary of the tool, not a bug.

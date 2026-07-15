@@ -1,6 +1,6 @@
 # Project Guide
 
-Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee of four role-agents (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) holds a **real debate** over a frozen evidence snapshot (Wave 3): round 0 is the independent **blind** opening (each role renders one claim without seeing the others, so cross-role agreement is real signal), then — unless the openings already agree — the roles read the full transcript and the challenges aimed at them and revise across conversational rounds, conceding only to evidence, until positions stop moving. A VOI gate then routes the *surviving* disagreements — interpretive ones are resolved and reported as a fault line, evidential ones (a named gap) earn more retrieval budget. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
+Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl app ("Blindspot"). A manager decomposes a topic into questions; for each question a committee of four role-agents (Historian, Operator, Investor on Claude Sonnet 5; Skeptic on GPT-4o) holds a **real debate** over a frozen evidence snapshot (Wave 3): round 0 is the independent **blind** opening (each role renders one claim — a `conclusion`, a calibrated `confidence`, and a categorical `stance` — without seeing the others, so cross-role agreement is real signal), then — **only when the openings show genuine disagreement** (≥2 distinct decisive stances, or an evidence id-clash) — the roles read the full transcript and the challenges aimed at them and revise across conversational rounds, conceding only to evidence, until positions stop moving. The committee debates to RESOLVE disagreement; **agreement is a trigger to ACT, not a dead end.** A gate then routes each question on its committee stance: a unanimous decisive lean is a settled answer; a `contested` split routes by contention (interpretive → resolve + report the fault line, evidential/named-gap → more retrieval); an `insufficient` verdict with a named gap goes back to retrieval (go get it), and if that gap survives one no-progress loop it's noted as a limitation, not chased forever. Orchestration is LangGraph.js. Two arms (baseline single-prompt vs orchestrated graph) run side-by-side.
 
 **Current status, changelog, and open issues live in [STATUS.md](STATUS.md).** This file holds stable reference only.
 
@@ -10,20 +10,21 @@ Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl ap
 |------|---------|
 | `src/lib/schemas/state.ts` | ResearchState (LangGraph Annotation) + debateTranscripts channel (mergeTranscripts) |
 | `src/lib/schemas/evidence.ts` | Evidence zod schema |
-| `src/lib/schemas/claim.ts` | Claim + DebateResponse / DebateTurnOutput zod schemas (debateRound, responses) |
+| `src/lib/schemas/claim.ts` | Claim + DebateResponse / DebateTurnOutput zod schemas (debateRound, responses); `stance` (supports/opposes/insufficient) + `coerceStance` code clamp |
 | `src/lib/models/provider.ts` | Model assignments per agent role |
 | `src/lib/evidence/firecrawl.ts` | search() and explore() |
 | `src/lib/evidence/store.ts` | In-memory Evidence store + contentHash |
 | `src/lib/orchestration/graph.ts` | StateGraph + runGraph() + synthesizeReport() |
 | `src/lib/orchestration/committee.ts` | runCommittee() (blind round-0 opening) + runDebate() (full debate loop) + buildCommitteeMessages/buildDebateMessages |
-| `src/lib/orchestration/debate.ts` | Debate types + pure logic: roundOneConsensus, debateMovement, directedChallenges, renderTranscript, extractContentions, contentionRoute |
+| `src/lib/orchestration/debate.ts` | Debate types + pure logic: decisiveStances / hasGenuineDisagreement / committeeStance (stance-based, position-general), debateMovement, directedChallenges, renderTranscript, extractContentions (idClashBetween), contentionRoute |
 | `src/lib/orchestration/digest.ts` | Per-question Haiku evidence digest (L2) — compresses each source to one item before the committee |
-| `src/lib/orchestration/gate.ts` | allocateBudget() — contention routing (resolve interpretive at zero LLM cost) + VOI scoring; gateShortCircuit() (budget / max-loops / no-progress) |
+| `src/lib/orchestration/gate.ts` | allocateBudget() — questionRoute() (route on committeeStance + named gap at zero LLM cost: settle unanimous, retrieve insufficient+gap, resolve interpretive fault lines) + VOI scoring; diminishingReturns (patience=1); gateShortCircuit() (budget / cost-headroom / max-loops / no-progress) |
 | `src/lib/orchestration/limiter.ts` | createLimiter() — per-model + Firecrawl FIFO concurrency caps |
 | `src/lib/orchestration/cost-tracker.ts` | Per-run USD cost cap via AsyncLocalStorage (runWithCostTracker) |
-| `src/lib/orchestration/eval.ts` | ArmResult types + runBaseline() + toAnnotatedUsage() + rollupTokens() |
+| `src/lib/orchestration/eval.ts` | ArmResult types + runBaseline() + toAnnotatedUsage() (cache-aware cost) + rollupTokens() |
+| `src/lib/orchestration/mechanics.ts` | computeRunMechanics() + formatMechanicsReport() — per-run RUN MECHANICS report (retrieval, deliberation debated-vs-skipped + productive, cache-aware effort split, convergence) |
 | `src/lib/supabase.ts` | Supabase client backing the search/scrape/blocklist caches (`blindspot` schema; see `supabase/schema.sql`) |
-| `src/lib/params.ts` | Orchestration tunables (budget incl. per-loop reservation + recon depth + $ cap, thresholds, loop limits, digest, prompt-cache, model mix, concurrency, debate rounds/consensus) |
+| `src/lib/params.ts` | Orchestration tunables (budget incl. per-loop reservation + recon depth + $ cap, thresholds, loop limits, digest, prompt-cache, model mix, concurrency, debate rounds, movement epsilon) |
 | `src/lib/prompts.ts` | Single home for ALL LLM prompt WORDING (CONFIDENCE_CALIBRATION, ROLE_SYSTEM_PROMPTS, intake/decompose/digest/committee/debate/gate/refine/answer builders). Nodes keep state-shaping; wording lives here |
 | `scripts/compare-arms.ts` | A/B comparison harness (accepts --budget) |
 | `src/lib/research-events.ts` | ResearchEvent union (SSE wire protocol for orchestration) |
