@@ -10,7 +10,7 @@ import {
 import { rollupTokens } from "./eval";
 import type { ArmResult } from "./eval";
 import { computeRunMechanics } from "./mechanics";
-import type { ResearchStateT, Question } from "../schemas/state";
+import type { ResearchStateT, Question, RetrievalMode } from "../schemas/state";
 import type { Evidence } from "../schemas/evidence";
 import type { SearchProgress } from "../evidence/firecrawl";
 import type { Claim } from "../schemas/claim";
@@ -26,16 +26,21 @@ export function runGraphStreaming(
   topic: string,
   send: (event: ResearchEvent) => void,
   budgetOverride?: number,
+  // Default to the agentic arm: it's the flagship retrieval path and the ONLY one that emits the
+  // per-question `researcher:*` progress the UI renders. `runGraph` (non-streaming) defaults to
+  // "coded" as the eval control; the live/streaming surface defaults to "agentic" on purpose.
+  retrievalMode: RetrievalMode = "agentic",
 ): Promise<ArmResult> {
   // Per-run cost tracker via AsyncLocalStorage — see runWithCostTracker. Isolates
   // this run's spend from any other concurrent run in the same process.
-  return runWithCostTracker(() => runGraphStreamingInner(topic, send, budgetOverride));
+  return runWithCostTracker(() => runGraphStreamingInner(topic, send, budgetOverride, retrievalMode));
 }
 
 async function runGraphStreamingInner(
   topic: string,
   send: (event: ResearchEvent) => void,
   budgetOverride?: number,
+  retrievalMode: RetrievalMode = "agentic",
 ): Promise<ArmResult> {
   const trace = startTrace();
   const graph = compileResearchGraph();
@@ -55,7 +60,7 @@ async function runGraphStreamingInner(
 
   const initialBudget = budgetOverride ?? TOTAL_FIRECRAWL_BUDGET;
   const stream = await graph.stream(
-    { topic, budgetRemaining: initialBudget },
+    { topic, budgetRemaining: initialBudget, retrievalMode },
     // "updates" fires only on node COMPLETION, so begin events are emitted eagerly
     // below (each node's successor is deterministic). "custom" carries live
     // search/scrape progress written by the retrieve node's config.writer.
