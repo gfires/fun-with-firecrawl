@@ -348,6 +348,63 @@ describe("runResearcher — real-credit charge", () => {
   });
 });
 
+describe("runResearcher — reader path honors the cache end-to-end (0 credits, no network)", () => {
+  // These prove the AGENT benefits from the cache through the whole tool-loop — not just the
+  // primitives in isolation. A populated scrape/search cache means a run over the same URLs/queries
+  // charges the PassPool 0 and never issues a Firecrawl network call (h.scrapeCalls/h.searchCalls
+  // stay 0). This is the guarantee that made the live run bill 0 credits on its 7 cache hits.
+  it("readSource of a scrape-cached URL stores the evidence but charges 0 and makes no scrapeUrl call", async () => {
+    h.scrapeCacheValue = "cached page body";
+    scriptModel([readStep(["https://ex.com/cached-1", "https://ex.com/cached-2"]), stopStep]);
+
+    const pool = new PassPool(100);
+    const { evidence } = await runResearcher(q("qc"), "m", 1, new Set(), pool);
+
+    expect(evidence).toHaveLength(1); // both urls scrape to identical cached content → one Evidence
+    expect(evidence[0].content).toBe("cached page body");
+    expect(pool.spent).toBe(0); // cache hit → no real credit charged
+    expect(pool.calls).toBe(0); // no billable Firecrawl call recorded
+    expect(h.scrapeCalls).toBe(0); // the SDK scrapeUrl was never invoked
+  });
+
+  it("webSearch of a query-cached query returns hits but charges 0 and makes no search call", async () => {
+    h.searchCacheValue = [{ url: "https://cached.com/x", title: "C", snippet: "s" }];
+    const returns: unknown[] = [];
+    const probe: StepFn = async (tools) => {
+      returns.push(await tools.webSearch.execute({ query: "anything" }, ctx));
+      return true;
+    };
+    scriptModel([probe, stopStep]);
+
+    const pool = new PassPool(100);
+    await runResearcher(q("qc"), "m", 1, new Set(), pool);
+
+    expect(Array.isArray(returns[0])).toBe(true);
+    expect((returns[0] as unknown[]).length).toBe(1); // the cached hit surfaced to the agent
+    expect(pool.spent).toBe(0);
+    expect(pool.calls).toBe(0);
+    expect(h.searchCalls).toBe(0); // the SDK search was never invoked
+  });
+
+  it("search THEN read of the same cached URL: whole pass bills 0 and touches no network", async () => {
+    // End-to-end: a cached search surfaces a hit whose URL is also scrape-cached — the agent reads it
+    // and the entire pass costs nothing. This is the compound cache-hit path a warm run walks.
+    h.searchCacheValue = [{ url: "https://cached.com/read-me", title: "C", snippet: "s" }];
+    h.scrapeCacheValue = "warm content";
+    scriptModel([webSearchStep(), readStep(["https://cached.com/read-me"]), stopStep]);
+
+    const pool = new PassPool(100);
+    const { evidence } = await runResearcher(q("qc"), "m", 1, new Set(), pool);
+
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].content).toBe("warm content");
+    expect(pool.spent).toBe(0);
+    expect(pool.calls).toBe(0);
+    expect(h.searchCalls).toBe(0);
+    expect(h.scrapeCalls).toBe(0);
+  });
+});
+
 describe("runResearcher — interior $-cap propagation", () => {
   it("rejects with BudgetExceededError when spend is already over the cap (node-entry check)", async () => {
     scriptModel([webSearchStep(), stopStep]);
