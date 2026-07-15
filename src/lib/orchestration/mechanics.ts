@@ -265,12 +265,25 @@ export function computeRunMechanics(
     const request = (d.request ?? {}) as Record<string, unknown>;
     const model = str(request.model);
     const usage = (d.usage ?? {}) as Record<string, unknown>;
+    // Forward the AI SDK v7 cache breakdown (inputTokenDetails.{cacheReadTokens,cacheWriteTokens})
+    // so the split bills cache-reads at the read rate — matching the live cost tracker. Without this
+    // the report double-counts cached re-reads at full price and over-states deliberation cost.
+    const rawDetails = usage.inputTokenDetails;
+    const inputTokenDetails =
+      rawDetails && typeof rawDetails === "object"
+        ? {
+            cacheReadTokens: num((rawDetails as Record<string, unknown>).cacheReadTokens),
+            cacheWriteTokens: num((rawDetails as Record<string, unknown>).cacheWriteTokens),
+            noCacheTokens: num((rawDetails as Record<string, unknown>).noCacheTokens),
+          }
+        : undefined;
     const annotated = toAnnotatedUsage(
       {
         inputTokens: num(usage.inputTokens),
         outputTokens: num(usage.outputTokens),
         cachedInputTokens:
           typeof usage.cachedInputTokens === "number" ? usage.cachedInputTokens : undefined,
+        ...(inputTokenDetails ? { inputTokenDetails } : {}),
       },
       model,
       label,

@@ -320,6 +320,30 @@ describe("computeRunMechanics — effortSplit", () => {
     expect(m.effortSplit.tokensByGroup.deliberation.in).toBe(3000);
     expect(m.effortSplit.tokensByGroup.deliberation.out).toBe(1500);
   });
+
+  it("discounts cache-read tokens in the split (cache-aware, reconciles to the real cost path)", () => {
+    // The AI SDK reports the cache breakdown under inputTokenDetails.{cacheReadTokens,cacheWriteTokens}
+    // — NOT the legacy top-level cachedInputTokens. The split must forward it so 9k cached tokens bill
+    // at the read rate, not full price (otherwise the report over-states deliberation cost).
+    const usage = {
+      inputTokens: 10000,
+      outputTokens: 100,
+      inputTokenDetails: { cacheReadTokens: 9000, cacheWriteTokens: 0, noCacheTokens: 1000 },
+    };
+    const entries: TraceEntry[] = [
+      entry("llm:call", { label: "debate:historian", request: { model: "claude-sonnet-5", loopIteration: 1 }, usage }),
+    ];
+    const m2 = computeRunMechanics(entries, makeState(), makeTokens(0));
+    const expected = toAnnotatedUsage(usage, "claude-sonnet-5", "debate:historian").costUsd;
+    expect(m2.effortSplit.costByGroup.deliberation).toBeCloseTo(expected, 8);
+    // …and that is strictly cheaper than billing all 10k input at the full rate.
+    const fullPrice = toAnnotatedUsage(
+      { inputTokens: 10000, outputTokens: 100 },
+      "claude-sonnet-5",
+      "debate:historian",
+    ).costUsd;
+    expect(m2.effortSplit.costByGroup.deliberation).toBeLessThan(fullPrice);
+  });
 });
 
 describe("computeRunMechanics — convergence", () => {

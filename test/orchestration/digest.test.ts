@@ -8,7 +8,7 @@ import {
   type DigestItem,
 } from "@/lib/orchestration/digest";
 import { mergeDigests } from "@/lib/schemas/state";
-import { MAX_DIGEST_SUMMARY_CHARS } from "@/lib/params";
+import { MAX_DIGEST_SUMMARY_CHARS, MAX_EVIDENCE_CHARS_PER_AGENT } from "@/lib/params";
 import type { Question } from "@/lib/schemas/state";
 import type { Evidence } from "@/lib/schemas/evidence";
 import { fakeGenResult } from "../helpers/mock-ai";
@@ -137,6 +137,28 @@ describe("formatDigestForCommittee", () => {
     // e2 was not digested — its snippet stands in, and its id is still present/citable.
     expect(out).toContain("[e2]");
     expect(out).toContain("snippet e2");
+  });
+
+  it("caps the total block at MAX_EVIDENCE_CHARS_PER_AGENT (mirrors the raw-evidence path)", () => {
+    // Many large digest items — an evidence-heavy multi-loop run. Without a cap the block the whole
+    // committee re-reads every call grows unbounded; cap it like formatEvidence so deliberation input
+    // stays bounded. Uniform across roles (still byte-identical), so the L3 shared-prefix cache holds.
+    const big = "x".repeat(MAX_DIGEST_SUMMARY_CHARS);
+    const evidence = Array.from({ length: 200 }, (_, i) => ev(`e${i}`));
+    const items: DigestItem[] = evidence.map((e) => ({ evidenceId: e.id, summary: big }));
+    const out = formatDigestForCommittee(evidence, items);
+    // 200 × ~400-char summaries ≈ 80k chars uncapped; the cap keeps it near the ceiling.
+    expect(out.length).toBeLessThanOrEqual(MAX_EVIDENCE_CHARS_PER_AGENT + big.length);
+    expect(out.length).toBeLessThan(200 * big.length);
+    expect(out).toContain("[e0]"); // keeps the earliest sources
+  });
+
+  it("always keeps at least the first source even if it alone exceeds the cap", () => {
+    const huge = "y".repeat(MAX_EVIDENCE_CHARS_PER_AGENT * 2);
+    const evidence = [ev("e1"), ev("e2")];
+    const items: DigestItem[] = [{ evidenceId: "e1", summary: huge }, { evidenceId: "e2", summary: "two" }];
+    const out = formatDigestForCommittee(evidence, items);
+    expect(out).toContain("[e1]"); // never returns an empty block
   });
 });
 

@@ -18,7 +18,7 @@ import type { Question } from "../schemas/state";
 import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
-import { MAX_DIGEST_SUMMARY_CHARS, LLM_MAX_RETRIES } from "../params";
+import { MAX_DIGEST_SUMMARY_CHARS, MAX_EVIDENCE_CHARS_PER_AGENT, LLM_MAX_RETRIES } from "../params";
 // Prompt wording lives in src/lib/prompts.ts; this file keeps the source assembly + clamping logic.
 import { NO_EVIDENCE_NOTICE, digestPrompt } from "../prompts";
 
@@ -89,9 +89,20 @@ export function formatDigestForCommittee(evidence: Evidence[], items: DigestItem
     return NO_EVIDENCE_NOTICE;
   }
   const summaryById = new Map(items.map((it) => [it.evidenceId, it.summary]));
-  return evidence
-    .map((e) => `[${e.id}] ${e.title} (${e.domain})\n  ${summaryById.get(e.id) ?? e.snippet}`)
-    .join("\n\n");
+  // Cap the total block at MAX_EVIDENCE_CHARS_PER_AGENT, exactly like the raw-evidence path
+  // (formatEvidence). A multi-loop run accumulates every source's digest item, so an uncapped block
+  // grows without bound and is re-read by the WHOLE committee on every call — the biggest avoidable
+  // deliberation-input sink. The cap is uniform across roles, so the block stays byte-identical and
+  // the L3 shared-prefix cache still hits; always keep at least the first source (never empty).
+  let totalChars = 0;
+  const blocks: string[] = [];
+  for (const e of evidence) {
+    const block = `[${e.id}] ${e.title} (${e.domain})\n  ${summaryById.get(e.id) ?? e.snippet}`;
+    if (totalChars + block.length > MAX_EVIDENCE_CHARS_PER_AGENT && blocks.length > 0) break;
+    blocks.push(block);
+    totalChars += block.length;
+  }
+  return blocks.join("\n\n");
 }
 
 /**
