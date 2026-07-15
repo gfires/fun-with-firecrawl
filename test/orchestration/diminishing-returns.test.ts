@@ -28,6 +28,7 @@ function claim(
     agentRole: role,
     conclusion: `${role} take`,
     confidence,
+    stance: "insufficient",
     supportingEvidenceIds: [],
     contradictingEvidenceIds: [],
     missingEvidence: Array.from({ length: gaps }, (_, i) => `gap ${i}`),

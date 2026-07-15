@@ -3,6 +3,33 @@ import { z } from "zod";
 export const AgentRole = z.enum(["historian", "operator", "investor", "skeptic"]);
 
 /**
+ * A role's POSITION on the question — the signal the disagreement detector reads. This 3-value set is
+ * the OPPORTUNITY-ANALYSIS instantiation of a general "position": today's committee is a
+ * thesis-adjudicator by construction (each Claim is a lean + confidence on the opportunity), so a
+ * categorical stance just makes explicit the lean the roles already hold. `"insufficient"` is the
+ * ABSTENTION value (evidence can't support a directional call yet). A future richer taxonomy only
+ * GROWS this enum; the detector (decisiveStances / hasGenuineDisagreement / committeeStance) is
+ * written over positions generally and needs no edit.
+ */
+export const CLAIM_STANCES = ["supports", "opposes", "insufficient"] as const;
+export const ClaimStance = z.enum(CLAIM_STANCES);
+export type ClaimStanceT = z.infer<typeof ClaimStance>;
+
+/** The abstention value — a role that can't yet take a directional position. Excluded from decisive stances. */
+export const ABSTENTION_STANCE: ClaimStanceT = "insufficient";
+
+const STANCE_SET = new Set<string>(CLAIM_STANCES);
+
+/**
+ * Clamp an LLM-emitted stance to a valid value in CODE (never trust the model): a missing or
+ * out-of-enum value becomes the abstention `"insufficient"`. Mirrors how confidence is range-clamped
+ * after generation — enforce the invariant in code, so a drifting model can never kill a run.
+ */
+export function coerceStance(value: unknown): ClaimStanceT {
+  return typeof value === "string" && STANCE_SET.has(value) ? (value as ClaimStanceT) : ABSTENTION_STANCE;
+}
+
+/**
  * One role's directed reply to a peer during debate. `stance` is what the role does to the
  * target's position; `point` says why (grounded in an evidence id). These pairs are the edges
  * of the who-disagrees-with-whom graph the debate produces — movement/contention signals are
@@ -26,6 +53,7 @@ export const ClaimSchema = z.object({
   agentRole: AgentRole,
   conclusion: z.string(),
   confidence: z.number().min(0).max(1),
+  stance: ClaimStance,
   supportingEvidenceIds: z.array(z.string()),
   contradictingEvidenceIds: z.array(z.string()),
   missingEvidence: z.array(z.string()),
@@ -46,6 +74,11 @@ export type AgentRoleT = z.infer<typeof AgentRole>;
 export const ClaimOutputSchema = z.object({
   conclusion: z.string().describe("2-3 sentence conclusion — be direct, no preamble"),
   confidence: z.number().describe("calibrated confidence between 0 and 1"),
+  stance: ClaimStance.describe(
+    "your lean on the OPPORTUNITY based on THIS question's evidence: 'supports' = evidence points " +
+      "toward the opportunity being real/attractive, 'opposes' = points against it, 'insufficient' = " +
+      "evidence can't support a directional call yet",
+  ),
   supportingEvidenceIds: z.array(z.string()),
   contradictingEvidenceIds: z.array(z.string()),
   missingEvidence: z.array(z.string()).describe("up to 3 specific evidence gaps, each under 100 chars"),

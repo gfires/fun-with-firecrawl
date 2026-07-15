@@ -21,7 +21,7 @@ function resp(targetRole: AgentRoleT, stance: DebateResponse["stance"]): DebateR
 function claim(role: AgentRoleT, o: Partial<Claim> = {}): Claim {
   return {
     id: `q1:${role}:0`, questionId: "q1", agentRole: role, conclusion: `${role} take`,
-    confidence: 0.4, supportingEvidenceIds: [], contradictingEvidenceIds: [], missingEvidence: [],
+    confidence: 0.4, stance: "insufficient", supportingEvidenceIds: [], contradictingEvidenceIds: [], missingEvidence: [],
     loopIteration: 0, debateRound: 1, responses: [], ...o,
   };
 }

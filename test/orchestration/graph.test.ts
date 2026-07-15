@@ -20,6 +20,7 @@ function claim(questionId: string, confidence: number): Claim {
     agentRole: "historian",
     conclusion: "…",
     confidence,
+    stance: "insufficient",
     supportingEvidenceIds: [],
     contradictingEvidenceIds: [],
     missingEvidence: [],

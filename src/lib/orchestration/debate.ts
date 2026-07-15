@@ -13,7 +13,8 @@
  * Everything here is computed from data the committee already produces (confidences, cited-id sets,
  * response stances); nothing invents a score.
  */
-import type { AgentRoleT, Claim, DebateResponse } from "../schemas/claim";
+import type { AgentRoleT, Claim, ClaimStanceT, DebateResponse } from "../schemas/claim";
+import { ABSTENTION_STANCE } from "../schemas/claim";
 
 /** One conversational round: every participating role's claim for that round. */
 export interface DebateRound {
@@ -51,24 +52,69 @@ export interface Contention {
 }
 
 /**
- * Does the opening round already AGREE, so no debate is worth running? Genuine agreement, not
- * shared uncertainty: nobody flags a contradiction, confidences are tight (spread below `spread`),
- * AND the whole committee is at/above the confidence floor. A cluster of low-confidence claims that
- * happen to sit close together is NOT consensus — it's four roles equally unsure, which is exactly
- * the case debate (and retrieval) should dig into. Computed purely from the committee's own real
- * confidences and cited-id sets; nothing is invented.
+ * The set of DECISIVE positions present among the claims — every distinct `stance` EXCEPT the
+ * abstention value `"insufficient"`. Written over positions GENERALLY (returns `Set<string>`), so a
+ * future richer stance taxonomy just adds more decisive values with no edit here. This is the raw
+ * signal both the disagreement detector and the committee-stance rollup key off.
  */
-export function roundOneConsensus(
-  claims: Claim[],
-  { spread, minConfidence }: { spread: number; minConfidence: number },
-): boolean {
-  if (claims.length === 0) return false;
-  if (claims.some((c) => c.contradictingEvidenceIds.length > 0)) return false;
-  const confidences = claims.map((c) => c.confidence);
-  const min = Math.min(...confidences);
-  const max = Math.max(...confidences);
-  if (min < minConfidence) return false;
-  return max - min < spread;
+export function decisiveStances(claims: Claim[]): Set<string> {
+  const stances = new Set<string>();
+  for (const c of claims) {
+    if (c.stance !== ABSTENTION_STANCE) stances.add(c.stance);
+  }
+  return stances;
+}
+
+/** The evidence ids over which two claims read the SAME source oppositely (one supports, one contradicts). */
+function idClashBetween(a: Claim, b: Claim): string[] {
+  const aContra = new Set(a.contradictingEvidenceIds);
+  const bContra = new Set(b.contradictingEvidenceIds);
+  return [
+    ...a.supportingEvidenceIds.filter((id) => bContra.has(id)),
+    ...b.supportingEvidenceIds.filter((id) => aContra.has(id)),
+  ];
+}
+
+/** True iff ANY pair of claims reads some evidence id oppositely (an id-clash exists among them). */
+function anyIdClash(claims: Claim[]): boolean {
+  for (let i = 0; i < claims.length; i++) {
+    for (let j = i + 1; j < claims.length; j++) {
+      if (idClashBetween(claims[i], claims[j]).length > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Is there GENUINE disagreement worth debating over these (blind, round-0) opening claims? Two ways
+ * to disagree: the roles took ≥2 distinct DECISIVE positions (`decisiveStances(claims).size >= 2`),
+ * OR they read the same evidence oppositely (an `idClash` — reused from extractContentions, and valid
+ * on blind openings because it needs no debate responses). For the current 3-value enum the stance
+ * arm equals "supports AND opposes both present"; an N-way enum needs no edit. When NEITHER holds —
+ * unanimous lean, one lean plus abstentions, or shared uncertainty — there is nothing to resolve, so
+ * the conversational rounds (and the gate's retrieval on this signal) are skipped: agreement is a
+ * trigger to ACT, not a debate to run.
+ */
+export function hasGenuineDisagreement(claims: Claim[]): boolean {
+  return decisiveStances(claims).size >= 2 || anyIdClash(claims);
+}
+
+/**
+ * The committee's overall position, rolled up from the per-role stances:
+ * - ≥2 decisive stances present → `"contested"` (a genuine fault line);
+ * - else if ANY role abstains (`"insufficient"`) → `"insufficient"` — a one-sided lean with any
+ *   abstention is "not enough to call" (decision 3: only a UNANIMOUS decisive lean is a confident answer);
+ * - else the single decisive stance the whole committee shares (`"supports"` / `"opposes"`);
+ * - else (no claims) → `"insufficient"`.
+ * The return type is the opportunity instantiation; the logic is position-general.
+ */
+export type CommitteeStance = "contested" | ClaimStanceT;
+export function committeeStance(claims: Claim[]): CommitteeStance {
+  const decisive = decisiveStances(claims);
+  if (decisive.size >= 2) return "contested";
+  if (claims.some((c) => c.stance === ABSTENTION_STANCE)) return ABSTENTION_STANCE;
+  if (decisive.size === 1) return [...decisive][0] as ClaimStanceT;
+  return ABSTENTION_STANCE;
 }
 
 /** Every (fromRole → targetRole) pair carrying a "rebut" stance in a round, as `from>target` keys. */
@@ -213,12 +259,7 @@ export function extractContentions(questionId: string, finalClaims: Claim[]): Co
       const aConcedesB = a.responses.some((r) => r.targetRole === roleB && r.stance === "concede");
       const unresolvedRebuttal = (aRebutsB && !bConcedesA) || (bRebutsA && !aConcedesB);
 
-      const aContra = new Set(a.contradictingEvidenceIds);
-      const bContra = new Set(b.contradictingEvidenceIds);
-      const clashIds = [
-        ...a.supportingEvidenceIds.filter((id) => bContra.has(id)),
-        ...b.supportingEvidenceIds.filter((id) => aContra.has(id)),
-      ];
+      const clashIds = idClashBetween(a, b);
       const idClash = clashIds.length > 0;
 
       if (!unresolvedRebuttal && !idClash) continue;

@@ -340,9 +340,13 @@ export function committeeUserMessage(role: AgentRoleT, priorClaim?: Claim): stri
     priorClaim
       ? "Render your UPDATED Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct."
       : "Render your Claim now. Keep conclusion to 2-3 sentences (under 400 chars) — be direct.",
+    "State your `stance` — your position on the OPPORTUNITY given THIS question's evidence: 'supports'",
+    "(evidence points toward the opportunity being real/attractive), 'opposes' (points against it), or",
+    "'insufficient' (the evidence can't support a directional call yet). Do not default to 'insufficient'",
+    "to hedge — take the directional position the evidence warrants, and reserve it for genuine abstention.",
     "List the load-bearing evidence gaps (0-3) in missingEvidence (each under 100 chars) — only ones more",
     "searching could plausibly close, never structurally-private data; leave it empty if none qualify.",
-    "Only fill: conclusion, confidence, supportingEvidenceIds, contradictingEvidenceIds, missingEvidence.",
+    "Only fill: conclusion, confidence, stance, supportingEvidenceIds, contradictingEvidenceIds, missingEvidence.",
   ].join("\n");
 }
 
@@ -397,6 +401,9 @@ export function debateUserMessage(args: {
     "the id that backs you). You may ONLY concede to evidence, never to consensus — if you move, name the",
     "id that moved you. Then render your UPDATED Claim (conclusion 2-3 sentences, under 400 chars) and your",
     "`responses` (one directed reply per peer you engage: rebut / concede / extend, each citing an id).",
+    "State your `stance` on the OPPORTUNITY given the evidence: 'supports', 'opposes', or 'insufficient'",
+    "(the evidence can't support a directional call yet) — take the position the evidence warrants, do not",
+    "abstain to hedge.",
     "List the load-bearing evidence gaps (0-3) in missingEvidence (each under 100 chars) — only ones more",
     "searching could plausibly close, never structurally-private data; leave it empty if none qualify.",
   ].join("\n");

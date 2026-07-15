@@ -19,7 +19,7 @@
  * adversarial check is not just a re-prompt of the same weights.
  */
 import { generateText, Output, type ModelMessage } from "ai";
-import { ClaimOutputSchema, DebateTurnOutputSchema, type Claim, type AgentRoleT } from "../schemas/claim";
+import { ClaimOutputSchema, DebateTurnOutputSchema, coerceStance, type Claim, type AgentRoleT } from "../schemas/claim";
 import type { Evidence } from "../schemas/evidence";
 import type { Question } from "../schemas/state";
 import { modelForRole, modelForDebateRound } from "../models/provider";
@@ -31,8 +31,6 @@ import {
   PROMPT_CACHE_MIN_CHARS,
   LLM_MAX_RETRIES,
   MAX_DEBATE_ROUNDS,
-  DEBATE_CONSENSUS_SPREAD,
-  DEBATE_CONSENSUS_MIN_CONFIDENCE,
   DEBATE_CONFIDENCE_EPSILON,
 } from "../params";
 // Prompt WORDING lives in one place (src/lib/prompts.ts). This file keeps the state-shaping and
@@ -46,7 +44,7 @@ import {
 } from "../prompts";
 import { formatDigestForCommittee, type DigestItem } from "./digest";
 import { limiterForModel } from "./limiter";
-import { renderTranscript, roundOneConsensus, debateMovement, directedChallenges, type DebateRound } from "./debate";
+import { renderTranscript, hasGenuineDisagreement, debateMovement, directedChallenges, type DebateRound } from "./debate";
 
 const ROLES: AgentRoleT[] = ["historian", "operator", "investor", "skeptic"];
 
@@ -295,6 +293,8 @@ export async function runCommittee(
       // Schema no longer hard-caps these (providers don't enforce them);
       // clamp here so downstream math and the gate see bounded values.
       confidence: Math.max(0, Math.min(1, object.confidence)),
+      // Enforce stance validity in code (missing/invalid → abstention), never trusting the model.
+      stance: coerceStance(object.stance),
       missingEvidence: object.missingEvidence.slice(0, 3),
       id: `${question.id}:${role}:${loopIteration}`,
       questionId: question.id,
@@ -332,8 +332,9 @@ export interface DebateResult {
  * Run the committee as a REAL debate over one question and its (frozen) evidence.
  *
  * Round 0 is the existing independent opening (runCommittee): four blind claims, which preserves the
- * historian-confabulation fix and makes cross-role agreement real signal. If those openings already
- * AGREE (roundOneConsensus) we stop there — no debate is worth running. Otherwise each role reads the
+ * historian-confabulation fix and makes cross-role agreement real signal. If those openings show no
+ * GENUINE disagreement (hasGenuineDisagreement) we stop there — no debate is worth running. Otherwise
+ * each role reads the
  * full prior transcript and the challenges aimed at it and revises across conversational rounds,
  * conceding ONLY to evidence. Each round is staggered exactly like round 0 (historian first to write
  * the shared cached prefix, the rest in parallel to read it) so the L3 cache still hits, and uses the
@@ -358,11 +359,11 @@ export async function runDebate(
   const rounds: DebateRound[] = [{ round: 0, claims: opening.claims }];
   const usage: AnnotatedUsage[] = [...opening.usage];
 
-  // Consensus fast-path: genuine agreement on the openings → no debate, no gate retrieval.
-  if (roundOneConsensus(opening.claims, {
-    spread: DEBATE_CONSENSUS_SPREAD,
-    minConfidence: DEBATE_CONSENSUS_MIN_CONFIDENCE,
-  })) {
+  // Skip the conversational rounds unless the blind openings show GENUINE disagreement — ≥2 decisive
+  // stances or an id-clash (hasGenuineDisagreement). Unanimous lean, one lean plus abstentions, or
+  // shared uncertainty all mean there's nothing to resolve, so we return the round-0 claims as final
+  // (exactly as the old consensus fast-path did) and let the gate route the agreement (Phase B).
+  if (!hasGenuineDisagreement(opening.claims)) {
     return { claims: opening.claims, rounds, usage };
   }
 
@@ -399,6 +400,7 @@ export async function runDebate(
     const claim: Claim = {
       ...object,
       confidence: Math.max(0, Math.min(1, object.confidence)),
+      stance: coerceStance(object.stance),
       missingEvidence: object.missingEvidence.slice(0, 3),
       id: `${question.id}:${role}:${loopIteration}:d${r}`,
       questionId: question.id,

@@ -1,14 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
-  roundOneConsensus,
+  decisiveStances,
+  hasGenuineDisagreement,
+  committeeStance,
   debateMovement,
   directedChallenges,
   renderTranscript,
   extractContentions,
   type DebateRound,
 } from "@/lib/orchestration/debate";
-import { DEBATE_CONSENSUS_SPREAD, DEBATE_CONSENSUS_MIN_CONFIDENCE, DEBATE_CONFIDENCE_EPSILON } from "@/lib/params";
-import type { AgentRoleT, Claim, DebateResponse } from "@/lib/schemas/claim";
+import { DEBATE_CONFIDENCE_EPSILON } from "@/lib/params";
+import type { AgentRoleT, Claim, ClaimStanceT, DebateResponse } from "@/lib/schemas/claim";
 
 function claim(role: AgentRoleT, overrides: Partial<Claim> = {}): Claim {
   return {
@@ -17,6 +19,7 @@ function claim(role: AgentRoleT, overrides: Partial<Claim> = {}): Claim {
     agentRole: role,
     conclusion: `${role} conclusion`,
     confidence: 0.7,
+    stance: "insufficient",
     supportingEvidenceIds: [],
     contradictingEvidenceIds: [],
     missingEvidence: [],
@@ -27,55 +30,150 @@ function claim(role: AgentRoleT, overrides: Partial<Claim> = {}): Claim {
   };
 }
 
+/** Build a claim carrying an ARBITRARY stance value — proves the detector is position-general. */
+function stanced(role: AgentRoleT, stance: string): Claim {
+  return claim(role, { stance: stance as ClaimStanceT });
+}
+
 function resp(targetRole: AgentRoleT, stance: DebateResponse["stance"], point = "p"): DebateResponse {
   return { targetRole, stance, point };
 }
 
-const opts = { spread: DEBATE_CONSENSUS_SPREAD, minConfidence: DEBATE_CONSENSUS_MIN_CONFIDENCE };
-
-describe("roundOneConsensus", () => {
-  it("true when confidences are tight, above the floor, and nobody contradicts", () => {
+describe("decisiveStances", () => {
+  it("returns the set of stances present, EXCLUDING the 'insufficient' abstention", () => {
     const claims = [
-      claim("historian", { confidence: 0.7 }),
-      claim("operator", { confidence: 0.75 }),
-      claim("investor", { confidence: 0.72 }),
-      claim("skeptic", { confidence: 0.68 }),
+      stanced("historian", "supports"),
+      stanced("operator", "opposes"),
+      stanced("investor", "insufficient"),
+      stanced("skeptic", "supports"),
     ];
-    expect(roundOneConsensus(claims, opts)).toBe(true);
+    expect(decisiveStances(claims)).toEqual(new Set(["supports", "opposes"]));
   });
 
-  it("false when any role flags a contradiction", () => {
-    const claims = [
-      claim("historian", { confidence: 0.7 }),
-      claim("operator", { confidence: 0.72 }),
-      claim("investor", { confidence: 0.71 }),
-      claim("skeptic", { confidence: 0.7, contradictingEvidenceIds: ["e9"] }),
-    ];
-    expect(roundOneConsensus(claims, opts)).toBe(false);
+  it("is empty when every role abstains", () => {
+    const claims = [stanced("historian", "insufficient"), stanced("operator", "insufficient")];
+    expect(decisiveStances(claims).size).toBe(0);
   });
 
-  it("false on a wide confidence spread even with no contradiction", () => {
+  it("is empty for no claims", () => {
+    expect(decisiveStances([]).size).toBe(0);
+  });
+});
+
+describe("hasGenuineDisagreement", () => {
+  it("true when two decisive stances are present (supports + opposes)", () => {
     const claims = [
-      claim("historian", { confidence: 0.9 }),
-      claim("operator", { confidence: 0.62 }),
-      claim("investor", { confidence: 0.88 }),
-      claim("skeptic", { confidence: 0.61 }),
+      stanced("historian", "supports"),
+      stanced("operator", "opposes"),
+      stanced("investor", "insufficient"),
+      stanced("skeptic", "insufficient"),
     ];
-    expect(roundOneConsensus(claims, opts)).toBe(false);
+    expect(hasGenuineDisagreement(claims)).toBe(true);
   });
 
-  it("false on low-confidence agreement (shared uncertainty, not consensus)", () => {
+  it("false when only one decisive stance is present, others abstain (decision 3)", () => {
     const claims = [
-      claim("historian", { confidence: 0.3 }),
-      claim("operator", { confidence: 0.32 }),
-      claim("investor", { confidence: 0.31 }),
-      claim("skeptic", { confidence: 0.29 }),
+      stanced("historian", "supports"),
+      stanced("operator", "supports"),
+      stanced("investor", "insufficient"),
+      stanced("skeptic", "insufficient"),
     ];
-    expect(roundOneConsensus(claims, opts)).toBe(false);
+    expect(hasGenuineDisagreement(claims)).toBe(false);
   });
 
-  it("false when there are no claims", () => {
-    expect(roundOneConsensus([], opts)).toBe(false);
+  it("false when all roles abstain (shared uncertainty, not disagreement)", () => {
+    const claims = [
+      stanced("historian", "insufficient"),
+      stanced("operator", "insufficient"),
+      stanced("investor", "insufficient"),
+      stanced("skeptic", "insufficient"),
+    ];
+    expect(hasGenuineDisagreement(claims)).toBe(false);
+  });
+
+  it("false when the whole committee agrees on one decisive stance", () => {
+    const claims = [
+      stanced("historian", "supports"),
+      stanced("operator", "supports"),
+      stanced("investor", "supports"),
+      stanced("skeptic", "supports"),
+    ];
+    expect(hasGenuineDisagreement(claims)).toBe(false);
+  });
+
+  it("true on an id-clash EVEN when stances agree (they read the same evidence oppositely)", () => {
+    // Both 'supports', but the historian's supporting id is the skeptic's contradicting id.
+    const claims = [
+      claim("historian", { stance: "supports", supportingEvidenceIds: ["e5"] }),
+      claim("skeptic", { stance: "supports", contradictingEvidenceIds: ["e5"] }),
+    ];
+    expect(decisiveStances(claims).size).toBe(1); // stances alone would say "no disagreement"
+    expect(hasGenuineDisagreement(claims)).toBe(true); // …but the id-clash catches it
+  });
+
+  it("false with no claims", () => {
+    expect(hasGenuineDisagreement([])).toBe(false);
+  });
+
+  it("generality: a 4-VALUE stance set with ≥2 decisive is disagreement (enum-agnostic)", () => {
+    // A future richer taxonomy only GROWS the enum; the detector must need no edit.
+    const claims = [
+      stanced("historian", "strongly-supports"),
+      stanced("operator", "leans-opposes"),
+      stanced("investor", "insufficient"),
+      stanced("skeptic", "neutral"),
+    ];
+    expect(hasGenuineDisagreement(claims)).toBe(true);
+  });
+});
+
+describe("committeeStance", () => {
+  it("'contested' when ≥2 decisive stances are present", () => {
+    const claims = [
+      stanced("historian", "supports"),
+      stanced("operator", "opposes"),
+      stanced("investor", "insufficient"),
+      stanced("skeptic", "insufficient"),
+    ];
+    expect(committeeStance(claims)).toBe("contested");
+  });
+
+  it("'insufficient' when one lean plus any abstention — not enough to call (decision 3)", () => {
+    expect(
+      committeeStance([
+        stanced("historian", "supports"),
+        stanced("operator", "supports"),
+        stanced("investor", "insufficient"),
+        stanced("skeptic", "insufficient"),
+      ]),
+    ).toBe("insufficient");
+    expect(
+      committeeStance([
+        stanced("historian", "opposes"),
+        stanced("operator", "insufficient"),
+      ]),
+    ).toBe("insufficient");
+  });
+
+  it("the single decisive stance when the committee is UNANIMOUS with no abstention", () => {
+    expect(
+      committeeStance([
+        stanced("historian", "supports"),
+        stanced("operator", "supports"),
+        stanced("investor", "supports"),
+        stanced("skeptic", "supports"),
+      ]),
+    ).toBe("supports");
+    expect(
+      committeeStance([stanced("historian", "opposes"), stanced("operator", "opposes")]),
+    ).toBe("opposes");
+  });
+
+  it("'insufficient' when every role abstains, or there are no claims", () => {
+    expect(
+      committeeStance([stanced("historian", "insufficient"), stanced("operator", "insufficient")]),
+    ).toBe("insufficient");
+    expect(committeeStance([])).toBe("insufficient");
   });
 });
 

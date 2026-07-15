@@ -12,6 +12,7 @@ function makeClaim(overrides: Partial<Claim> & { agentRole: Claim["agentRole"]; 
     id: `claim-${overrides.agentRole}-${overrides.questionId}-L${overrides.loopIteration ?? 0}`,
     conclusion: overrides.conclusion ?? "test conclusion",
     confidence: overrides.confidence ?? 0.5,
+    stance: overrides.stance ?? "insufficient",
     supportingEvidenceIds: overrides.supportingEvidenceIds ?? [],
     contradictingEvidenceIds: overrides.contradictingEvidenceIds ?? [],
     missingEvidence: overrides.missingEvidence ?? [],

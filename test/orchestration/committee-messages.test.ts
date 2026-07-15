@@ -120,6 +120,7 @@ describe("buildCommitteeMessages", () => {
       agentRole: "historian",
       conclusion: "prior conclusion text",
       confidence: 0.42,
+      stance: "insufficient",
       supportingEvidenceIds: [],
       contradictingEvidenceIds: [],
       missingEvidence: ["need pricing data"],

@@ -29,6 +29,7 @@ function claim(role: AgentRoleT, overrides: Partial<Claim> = {}): Claim {
     agentRole: role,
     conclusion: `${role} conclusion`,
     confidence: 0.5,
+    stance: "insufficient",
     supportingEvidenceIds: [],
     contradictingEvidenceIds: [],
     missingEvidence: [],

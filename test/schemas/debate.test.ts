@@ -29,6 +29,7 @@ describe("DebateTurnOutputSchema", () => {
     const turn = DebateTurnOutputSchema.parse({
       conclusion: "revised in light of the skeptic",
       confidence: 0.55,
+      stance: "opposes",
       supportingEvidenceIds: ["e1"],
       contradictingEvidenceIds: [],
       missingEvidence: [],
@@ -41,6 +42,7 @@ describe("DebateTurnOutputSchema", () => {
     const turn = DebateTurnOutputSchema.parse({
       conclusion: "unchanged",
       confidence: 0.5,
+      stance: "insufficient",
       supportingEvidenceIds: [],
       contradictingEvidenceIds: [],
       missingEvidence: [],
@@ -60,6 +62,7 @@ describe("DebateTurnOutputSchema", () => {
       DebateTurnOutputSchema.parse({
         conclusion: "c".repeat(5000),
         confidence: 0.5,
+        stance: "supports",
         supportingEvidenceIds: [],
         contradictingEvidenceIds: [],
         missingEvidence: [],
@@ -77,6 +80,7 @@ describe("ClaimSchema debate dimension", () => {
       agentRole: "historian",
       conclusion: "opening",
       confidence: 0.3,
+      stance: "supports",
       supportingEvidenceIds: [],
       contradictingEvidenceIds: [],
       missingEvidence: [],
@@ -86,6 +90,25 @@ describe("ClaimSchema debate dimension", () => {
     });
     expect(claim.debateRound).toBe(0);
     expect(claim.responses).toEqual([]);
+    expect(claim.stance).toBe("supports");
+  });
+
+  it("requires stance and rejects a value outside the enum", () => {
+    const base = {
+      id: "q1:historian:0",
+      questionId: "q1",
+      agentRole: "historian" as const,
+      conclusion: "opening",
+      confidence: 0.3,
+      supportingEvidenceIds: [],
+      contradictingEvidenceIds: [],
+      missingEvidence: [],
+      loopIteration: 0,
+      debateRound: 0,
+      responses: [],
+    };
+    expect(() => ClaimSchema.parse({ ...base, stance: "maybe" })).toThrow();
+    expect(() => ClaimSchema.parse(base)).toThrow(); // stance omitted
   });
 
   it("requires the debate fields (a pre-Wave-3 claim shape is rejected)", () => {

@@ -7,7 +7,7 @@ import { toAnnotatedUsage, type ArmTokens } from "../../src/lib/orchestration/ev
 import { MAX_RUN_COST_USD } from "../../src/lib/params";
 import type { TraceEntry } from "../../src/lib/orchestration/trace";
 import type { ResearchStateT, Question } from "../../src/lib/schemas/state";
-import type { Claim, AgentRoleT, DebateResponse } from "../../src/lib/schemas/claim";
+import type { Claim, AgentRoleT, ClaimStanceT, DebateResponse } from "../../src/lib/schemas/claim";
 import type { Evidence } from "../../src/lib/schemas/evidence";
 import type { DebateRound } from "../../src/lib/orchestration/debate";
 import { fallbackBrief } from "../../src/lib/schemas/brief";
@@ -50,6 +50,7 @@ function claim(
     missing?: string[];
     responses?: DebateResponse[];
     round?: number;
+    stance?: ClaimStanceT;
   } = {},
 ): Claim {
   return {
@@ -58,6 +59,7 @@ function claim(
     agentRole,
     conclusion: "c",
     confidence,
+    stance: opts.stance ?? "insufficient",
     supportingEvidenceIds: opts.supporting ?? [],
     contradictingEvidenceIds: opts.contradicting ?? [],
     missingEvidence: opts.missing ?? [],
