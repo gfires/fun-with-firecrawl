@@ -8,9 +8,10 @@
  * Requires OPENAI_API_KEY and FIRECRAWL_API_KEY (loaded from .env.local automatically).
  * Output: compare-output/<topic-slug>-<timestamp>.json
  *
- * The JSON has two keys — baseline and orchestrated — each with the full ScanReport and
- * a tokens block (per-call usage + total cost). Diff them by eye or in a JSON viewer.
- * When graph.ts / gate.ts don't exist yet, orchestrated is a stub object with { stub: true }.
+ * The JSON has an arms[] array — baseline, orchestrated (coded retrieval), and agentic
+ * (agentic retrieval) — each with the full report and a tokens block (per-call usage +
+ * total cost). Diff them by eye or in a JSON viewer. When graph.ts isn't available, the
+ * graph arms are skipped with a logged note.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
@@ -47,21 +48,29 @@ if (budgetFlag) {
   }
 }
 
-async function runOrchestrated(
+type RunGraph = (t: string, budget?: number, mode?: "coded" | "agentic") => Promise<ArmResult>;
+
+/**
+ * Run one graph arm (coded → "orchestrated", agentic → "agentic"). Returns null and logs a
+ * note if graph.ts / runGraph isn't available or the run fails, so a missing arm degrades
+ * gracefully instead of aborting the whole comparison.
+ */
+async function runGraphArm(
   t: string,
-): Promise<ArmResult | { arm: "orchestrated"; stub: true; note: string }> {
+  mode: "coded" | "agentic",
+  label: string,
+): Promise<ArmResult | null> {
   try {
-    // Dynamic import so missing graph.ts is a runtime stub, not a compile error.
+    // Dynamic import so a missing graph.ts is a runtime skip, not a compile error.
     const mod = await import("../src/lib/orchestration/graph");
-    const fn = (mod as { runGraph?: (t: string, budget?: number) => Promise<ArmResult> }).runGraph;
+    const fn = (mod as { runGraph?: RunGraph }).runGraph;
     if (typeof fn !== "function") throw new Error("runGraph not exported");
-    return await fn(t, budgetOverride);
-  } catch {
-    return {
-      arm: "orchestrated" as const,
-      stub: true,
-      note: "graph.ts / gate.ts not yet implemented — export runGraph(topic) from src/lib/orchestration/graph.ts to fill this arm",
-    };
+    return await fn(t, budgetOverride, mode);
+  } catch (err) {
+    console.log(
+      `      SKIPPED (${label}) — ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
   }
 }
 
@@ -69,43 +78,49 @@ function fmtMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+function logArmDone(arm: ArmResult, ms: number): void {
+  console.log(
+    `      done in ${fmtMs(ms)} — ` +
+      `$${arm.tokens.totalCostUsd.toFixed(4)} — ` +
+      `${arm.tokens.totalPromptTokens.toLocaleString()} in / ` +
+      `${arm.tokens.totalCompletionTokens.toLocaleString()} out tokens`,
+  );
+}
+
 async function main() {
   console.log(`\n=== compare-arms: "${topic}" ===\n`);
 
+  const arms: ArmResult[] = [];
+
   // --- Baseline arm ---
-  console.log("[1/2] Running baseline (single-prompt) arm…");
+  console.log("[1/3] Running baseline (single-prompt) arm…");
   const baseline = await runBaseline(topic);
-  console.log(
-    `      done in ${fmtMs(baseline.durationMs)} — ` +
-      `$${baseline.tokens.totalCostUsd.toFixed(4)} — ` +
-      `${baseline.tokens.totalPromptTokens.toLocaleString()} in / ` +
-      `${baseline.tokens.totalCompletionTokens.toLocaleString()} out tokens`,
-  );
+  logArmDone(baseline, baseline.durationMs);
+  arms.push(baseline);
 
-  // --- Orchestrated arm ---
-  console.log("[2/2] Running orchestrated (graph) arm…");
+  // --- Orchestrated arm (coded retrieval) ---
+  console.log("[2/3] Running orchestrated (coded graph) arm…");
   const orchStart = Date.now();
-  const orchestrated = await runOrchestrated(topic);
-  const orchMs = Date.now() - orchStart;
+  const orchestrated = await runGraphArm(topic, "coded", "orchestrated");
+  if (orchestrated) {
+    logArmDone(orchestrated, Date.now() - orchStart);
+    arms.push(orchestrated);
+  }
 
-  if ("stub" in orchestrated && orchestrated.stub) {
-    console.log(`      STUB — graph.ts not yet implemented`);
-  } else {
-    const o = orchestrated as ArmResult;
-    console.log(
-      `      done in ${fmtMs(orchMs)} — ` +
-        `$${o.tokens.totalCostUsd.toFixed(4)} — ` +
-        `${o.tokens.totalPromptTokens.toLocaleString()} in / ` +
-        `${o.tokens.totalCompletionTokens.toLocaleString()} out tokens`,
-    );
+  // --- Agentic arm (agentic retrieval) ---
+  console.log("[3/3] Running agentic (graph) arm…");
+  const agenticStart = Date.now();
+  const agentic = await runGraphArm(topic, "agentic", "agentic");
+  if (agentic) {
+    logArmDone(agentic, Date.now() - agenticStart);
+    arms.push(agentic);
   }
 
   // --- Write output ---
   const result: ComparisonResult = {
     topic,
     runAt: new Date().toISOString(),
-    baseline,
-    orchestrated,
+    arms,
   };
 
   const slug = topic
@@ -122,18 +137,11 @@ async function main() {
 
   // --- Cost summary ---
   console.log("\n--- Cost summary ---");
-  console.log(
-    `Baseline:     $${baseline.tokens.totalCostUsd.toFixed(4)}` +
-      `  (${baseline.tokens.calls.map((c) => `${c.label}: $${c.costUsd.toFixed(4)}`).join(", ")})`,
-  );
-  if (!("stub" in orchestrated)) {
-    const o = orchestrated as ArmResult;
+  for (const arm of arms) {
     console.log(
-      `Orchestrated: $${o.tokens.totalCostUsd.toFixed(4)}` +
-        `  (${o.tokens.calls.map((c) => `${c.label}: $${c.costUsd.toFixed(4)}`).join(", ")})`,
+      `${arm.arm.padEnd(13)} $${arm.tokens.totalCostUsd.toFixed(4)}` +
+        `  (${arm.tokens.calls.map((c) => `${c.label}: $${c.costUsd.toFixed(4)}`).join(", ")})`,
     );
-  } else {
-    console.log("Orchestrated: [stub — no data yet]");
   }
   console.log("");
 }

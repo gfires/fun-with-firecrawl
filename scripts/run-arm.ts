@@ -3,6 +3,7 @@
  *
  * Usage:
  *   npx tsx scripts/run-arm.ts orchestrated "freight brokerage"
+ *   npx tsx scripts/run-arm.ts agentic "freight brokerage"
  *   npx tsx scripts/run-arm.ts baseline "freight brokerage"
  *   npx tsx scripts/run-arm.ts orchestrated "freight brokerage" --budget=50
  *
@@ -31,13 +32,13 @@ const positional = cliArgs.filter((a) => !a.startsWith("--budget="));
 const arm = positional[0]?.trim();
 const topic = positional[1]?.trim();
 
-if (arm !== "orchestrated" && arm !== "baseline") {
-  console.error("Usage: tsx scripts/run-arm.ts <orchestrated|baseline> <topic> [--budget=N]");
-  console.error('Example: tsx scripts/run-arm.ts orchestrated "freight brokerage"');
+if (arm !== "orchestrated" && arm !== "baseline" && arm !== "agentic") {
+  console.error("Usage: tsx scripts/run-arm.ts <orchestrated|agentic|baseline> <topic> [--budget=N]");
+  console.error('Example: tsx scripts/run-arm.ts agentic "freight brokerage"');
   process.exit(1);
 }
 if (!topic) {
-  console.error("Usage: tsx scripts/run-arm.ts <orchestrated|baseline> <topic> [--budget=N]");
+  console.error("Usage: tsx scripts/run-arm.ts <orchestrated|agentic|baseline> <topic> [--budget=N]");
   process.exit(1);
 }
 
@@ -54,18 +55,26 @@ function fmtMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-async function runOrchestrated(t: string, budget?: number): Promise<ArmResult> {
+async function runGraphArm(
+  t: string,
+  mode: "coded" | "agentic",
+  budget?: number,
+): Promise<ArmResult> {
   const mod = await import("../src/lib/orchestration/graph");
-  const fn = (mod as { runGraph?: (t: string, budget?: number) => Promise<ArmResult> }).runGraph;
+  const fn = (
+    mod as { runGraph?: (t: string, budget?: number, mode?: "coded" | "agentic") => Promise<ArmResult> }
+  ).runGraph;
   if (typeof fn !== "function") throw new Error("runGraph not exported from graph.ts");
-  return await fn(t, budget);
+  return await fn(t, budget, mode);
 }
 
 async function main() {
   console.log(`\n=== run-arm: ${arm} — "${topic}" ===\n`);
 
   const result: ArmResult =
-    arm === "baseline" ? await runBaseline(topic) : await runOrchestrated(topic, budgetOverride);
+    arm === "baseline"
+      ? await runBaseline(topic)
+      : await runGraphArm(topic, arm === "agentic" ? "agentic" : "coded", budgetOverride);
 
   console.log(
     `done in ${fmtMs(result.durationMs)} — ` +

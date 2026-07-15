@@ -5,8 +5,7 @@ const NODES = [
   { id: "retrieve", x: 220, y: 90, label: "Retrieve" },
   { id: "debate", x: 360, y: 90, label: "Debate" },
   { id: "gate", x: 500, y: 90, label: "Gate" },
-  { id: "refine", x: 640, y: 90, label: "Refine" },
-  { id: "recommend", x: 780, y: 90, label: "Recommend" },
+  { id: "recommend", x: 640, y: 90, label: "Recommend" },
 ];
 
 const NODE_W = 110;
@@ -45,10 +44,9 @@ export function PipelineGraph({ activeNode, completedNodes, loopIteration, conti
           </filter>
         </defs>
 
-        {/* Edges between nodes (skip refine→recommend — refine loops back to retrieve) */}
+        {/* Edges between consecutive nodes (gate loops back to retrieve via the arc below) */}
         {NODES.slice(0, -1).map((node, i) => {
           const next = NODES[i + 1];
-          if (node.id === "refine") return null;
           const isActive = activeNode === next.id;
           return (
             <line
@@ -64,9 +62,9 @@ export function PipelineGraph({ activeNode, completedNodes, loopIteration, conti
           );
         })}
 
-        {/* Loop arc: refine → retrieve */}
+        {/* Loop arc: gate → retrieve */}
         <path
-          d="M 640,72 C 640,20 220,20 220,72"
+          d="M 500,72 C 500,20 220,20 220,72"
           fill="none"
           stroke={continueLoop && loopIteration > 0 ? "#2dd4bf" : "#1c2634"}
           strokeWidth={continueLoop && loopIteration > 0 ? 2 : 1.5}
@@ -78,8 +76,8 @@ export function PipelineGraph({ activeNode, completedNodes, loopIteration, conti
         {/* Loop iteration badge */}
         {loopIteration > 0 && (
           <g>
-            <rect x="415" y="8" width="30" height="18" rx="4" fill="#0b0f16" stroke="#1c2634" />
-            <text x="430" y="21" textAnchor="middle" fill="#2dd4bf" fontSize="11" fontFamily="var(--font-mono)">
+            <rect x="345" y="8" width="30" height="18" rx="4" fill="#0b0f16" stroke="#1c2634" />
+            <text x="360" y="21" textAnchor="middle" fill="#2dd4bf" fontSize="11" fontFamily="var(--font-mono)">
               L{loopIteration}
             </text>
           </g>

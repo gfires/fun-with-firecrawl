@@ -5,9 +5,9 @@
  * which is the same pipeline as scan/route.ts but without SSE streaming — it returns a
  * plain object so scripts and tests can call it directly and compare arms side-by-side.
  *
- * The orchestrated arm (runOrchestrated) lives here too once graph.ts + gate.ts exist;
- * for now the compare script stubs it. Both arms write into ComparisonResult so a human
- * can open one JSON file and read output + cost side-by-side.
+ * The orchestrated and agentic arms are produced by runGraph() in graph.ts; the compare
+ * script collects every arm into ComparisonResult.arms[] so a human can open one JSON file
+ * and read output + cost side-by-side.
  */
 import { explore } from "../evidence/firecrawl";
 import { callLLM, assembleReport } from "../analyze";
@@ -165,8 +165,7 @@ export interface ArmResult {
 export interface ComparisonResult {
   topic: string;
   runAt: string;
-  baseline: ArmResult;
-  orchestrated: ArmResult | { arm: "orchestrated"; stub: true; note: string };
+  arms: ArmResult[];
 }
 
 function collectingEventHandler(calls: AnnotatedUsage[]) {

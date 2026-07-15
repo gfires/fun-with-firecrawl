@@ -437,29 +437,6 @@ Return a decision for every question ID listed above.`;
 }
 
 // ---------------------------------------------------------------------------
-// refine — second-pass query generation
-// ---------------------------------------------------------------------------
-
-/**
- * The refine manager prompt: generate targeted second-pass search queries that close the evidence
- * gaps the committee named. `sectionText` is the caller's pre-rendered per-question gap block.
- */
-export function refinePrompt(sectionText: string[]): string {
-  return [
-    "You are a research manager refining search queries for a second pass.",
-    "The committee has reviewed initial evidence and identified gaps.",
-    "For each question below, generate 1–3 NEW, targeted search queries that",
-    "specifically address the noted evidence gaps. Do NOT repeat the original",
-    "question verbatim — instead craft queries that will surface the missing",
-    "information (specific data, counterexamples, named sources, etc.).",
-    "",
-    ...sectionText,
-    "",
-    "Return a searchQueries array for every question ID listed.",
-  ].join("\n");
-}
-
-// ---------------------------------------------------------------------------
 // synthesis — objective-level answer (A5)
 // ---------------------------------------------------------------------------
 

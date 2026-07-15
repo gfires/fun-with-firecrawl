@@ -4,7 +4,7 @@ import type { Claim } from "./schemas/claim";
 import type { AnnotatedUsage } from "./orchestration/eval";
 import type { ResearchReport } from "./orchestration/graph";
 
-export type ResearchPhase = "decompose" | "retrieve" | "debate" | "gate" | "refine" | "recommend" | "done";
+export type ResearchPhase = "decompose" | "retrieve" | "debate" | "gate" | "recommend" | "done";
 
 export interface GateScore {
   questionId: string;
@@ -35,8 +35,6 @@ export type ResearchEvent =
       continueLoop: boolean;
       gateScores: GateScore[];
     }
-  | { type: "refine:begin"; loopIteration: number; questionIds: string[] }
-  | { type: "refine:done"; loopIteration: number; refinedQueries: { questionId: string; queries: string[] }[] }
   | { type: "recommend:begin" }
   | { type: "recommend:done"; report: ResearchReport }
   | { type: "research:usage"; usage: AnnotatedUsage }
@@ -61,9 +59,6 @@ export function researchPhaseFor(type: ResearchEvent["type"]): ResearchPhase {
     case "gate:begin":
     case "gate:done":
       return "gate";
-    case "refine:begin":
-    case "refine:done":
-      return "refine";
     case "recommend:begin":
     case "recommend:done":
       return "recommend";

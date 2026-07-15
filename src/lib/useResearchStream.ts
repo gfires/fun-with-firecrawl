@@ -320,30 +320,6 @@ export function reduce(state: ResearchUIState, ev: ResearchEvent): ResearchUISta
       };
     }
 
-    case "refine:begin":
-      return {
-        ...state,
-        phase,
-        activeNode: "refine",
-        trace: [
-          ...state.trace,
-          `$ refining search queries from evidence gaps (loop ${ev.loopIteration}, ${ev.questionIds.length} questions)...`,
-        ],
-      };
-
-    case "refine:done":
-      return {
-        ...state,
-        activeNode: null,
-        completedNodes: state.completedNodes.includes("refine")
-          ? state.completedNodes
-          : [...state.completedNodes, "refine"],
-        trace: [
-          ...state.trace,
-          `$ refined queries for ${ev.refinedQueries.length} questions`,
-        ],
-      };
-
     case "recommend:begin":
       return {
         ...state,

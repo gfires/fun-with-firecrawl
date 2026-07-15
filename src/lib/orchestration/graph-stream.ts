@@ -71,7 +71,7 @@ async function runGraphStreamingInner(
   // Mirror of graph state needed to build eager begin events: the routing decision
   // after gate depends on budgetRemaining (see routeAfterGate), and begin payloads
   // need the current question list. Both are reconstructed from node outputs —
-  // retrieve returns budget DELTAS (additive reducer), decompose/gate/refine return
+  // retrieve returns budget DELTAS (additive reducer), decompose/gate return
   // the full question list.
   let currentQuestions: Question[] = [];
   let budgetRemaining = initialBudget;
@@ -248,38 +248,14 @@ async function runGraphStreamingInner(
               gateScores,
             });
 
-            // Next node mirrors routeAfterGate exactly: refine only when the gate
-            // wants another loop AND budget remains; otherwise recommend.
+            // Next node mirrors routeAfterGate: retrieve when the gate wants another
+            // loop AND budget remains (the loop-back retrieval pass); else recommend.
             if (continueLoop && budgetRemaining > 0) {
               currentLoopIteration = loopIteration;
-              send({ type: "refine:begin", loopIteration: currentLoopIteration, questionIds: unresolvedIds() });
+              send({ type: "retrieve:begin", loopIteration: currentLoopIteration, questionIds: unresolvedIds() });
             } else {
               send({ type: "recommend:begin" });
             }
-            break;
-          }
-
-          case "refine": {
-            const questions = (output.questions ?? []) as Question[];
-            const usages = (output.llmCalls ?? []) as AnnotatedUsage[];
-            allLlmCalls.push(...usages);
-            if (questions.length > 0) currentQuestions = questions;
-
-            for (const u of usages) {
-              send({ type: "research:usage", usage: u });
-            }
-
-            const refinedQueries = questions
-              .filter(q => q.searchQueries && q.searchQueries.length > 0)
-              .map(q => ({ questionId: q.id, queries: q.searchQueries! }));
-
-            send({
-              type: "refine:done",
-              loopIteration: currentLoopIteration,
-              refinedQueries,
-            });
-            // Next node is deterministic: refine → retrieve (next loop pass).
-            send({ type: "retrieve:begin", loopIteration: currentLoopIteration, questionIds: unresolvedIds() });
             break;
           }
 
