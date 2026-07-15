@@ -7,7 +7,7 @@ import { toAnnotatedUsage, type AnnotatedUsage } from "./eval";
 import type { GateScore } from "../research-events";
 import { getActiveTrace } from "./trace";
 import { getActiveCostTracker } from "./cost-tracker";
-import { extractContentions, contentionRoute, type Contention } from "./debate";
+import { extractContentions, contentionRoute, committeeStance, type Contention, type CommitteeStance } from "./debate";
 import type { Claim } from "../schemas/claim";
 // The gate-classifier prompt wording lives in src/lib/prompts.ts; this file computes the signals.
 import { gatePrompt } from "../prompts";
@@ -77,6 +77,52 @@ export function diminishingReturns(questionClaims: Claim[], confidenceEpsilon: n
   return !improved && !gapsReduced;
 }
 
+/**
+ * Route one unresolved question at the gate from its committee POSITION plus its named gap — the
+ * decision that makes "the committee debates disagreement; agreement is a trigger to ACT" real
+ * (zero LLM cost). This is the marginal-utility shut-off:
+ *
+ * - `"contested"` (a genuine fault line — the roles debated) → the EXISTING contention routing:
+ *   an EVIDENTIAL contention (a named gap that could settle it) earns retrieval; an interpretive-only
+ *   split (or no surviving contention) is futile to chase → resolve and report the fault line.
+ * - `"supports"` / `"opposes"` (a UNANIMOUS decisive lean, no abstention) → a confident answer → resolve.
+ * - `"insufficient"` (the committee can't call it yet) → a named, chase-able gap earns a retrieval
+ *   ("go get it"); with no gap there is nothing to fetch → resolve.
+ *
+ * PATIENCE=1 is enforced UPSTREAM by diminishingReturns, not here: an insufficient gap that already
+ * survived one no-progress retrieval loop is resolved (structural limitation) before this routing
+ * runs, so a question reaching this function with `stance === "insufficient"` and a gap is one worth
+ * trying (loop 0, or a loop that made progress). Pure/deterministic; mode-agnostic.
+ */
+export function questionRoute(args: {
+  stance: CommitteeStance;
+  contentions: Contention[];
+  hasNamedGap: boolean;
+}): "retrieve" | "resolve" {
+  const { stance, contentions, hasNamedGap } = args;
+  if (stance === "contested") {
+    return contentionRoute(contentions) === "retrieve" ? "retrieve" : "resolve";
+  }
+  if (stance === "insufficient") {
+    return hasNamedGap ? "retrieve" : "resolve";
+  }
+  // A unanimous decisive lean (supports/opposes) — settled.
+  return "resolve";
+}
+
+/** The zero-cost-resolve reason string for a question the gate settles from its stance route. */
+function routeReason(stance: CommitteeStance, contentions: Contention[]): string {
+  if (stance === "contested") {
+    return contentions.length
+      ? "interpretive contention — retrieving is futile, reporting the fault line"
+      : "committee split with no surviving contention — reporting the fault line";
+  }
+  if (stance === "insufficient") {
+    return "committee can't call it and named no chase-able gap — nothing to retrieve";
+  }
+  return `committee reached a unanimous ${stance} — settled`;
+}
+
 export async function allocateBudget(
   state: ResearchStateT
 ): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; gateScores: GateScore[] }> {
@@ -129,29 +175,35 @@ export async function allocateBudget(
     });
   }
 
-  // --- Contention routing (D5): the marginal-utility shut-off on the retrieval loop ---
-  // For each unresolved question, read the surviving disagreements from its debate transcript.
-  // A question whose contentions are all INTERPRETIVE (roles read the same evidence differently)
-  // — or whose committee simply AGREED (no contention) — can't be helped by more retrieval, so we
-  // resolve it HERE at zero LLM cost and report the fault line. Only questions with an EVIDENTIAL
-  // contention (a named gap) — or no transcript yet (route === null) — reach the LLM gate below.
+  // --- Stance routing (Phase B): the marginal-utility shut-off on the retrieval loop ---
+  // For each unresolved question, route on the committee's POSITION plus its named gap (see
+  // questionRoute): a UNANIMOUS decisive lean is a settled answer; an INTERPRETIVE split (or a
+  // contested question with no surviving contention) is futile to chase — both resolve HERE at zero
+  // LLM cost and report the fault line. An INSUFFICIENT question with a named gap — the "we agree we
+  // need more data" case — routes to RETRIEVE ("go get it"), NOT resolve, which was the bug a
+  // contention-only gate had (a skipped question has no debate responses → 0 contentions → it would
+  // silently give up). Only questions routed to retrieve — or with no transcript yet — reach the LLM
+  // gate below. patience=1 for insufficient gaps is enforced upstream by diminishingReturns.
   const contentionsByQuestion = new Map<string, Contention[]>();
-  const contentionResolved: GateScore[] = [];
+  const stanceByQuestion = new Map<string, CommitteeStance>();
+  const stanceResolved: GateScore[] = [];
   for (const q of unresolved.filter(q => !diminishingIds.has(q.id))) {
     const rounds = state.debateTranscripts[q.id];
     const finalRound = rounds?.[rounds.length - 1];
     if (!finalRound) continue; // no debate transcript → defer to the LLM gate (route null)
-    const contentions = extractContentions(q.id, finalRound.claims);
+    const claims = finalRound.claims;
+    const contentions = extractContentions(q.id, claims);
+    const stance = committeeStance(claims);
+    const hasNamedGap = claims.some(c => c.missingEvidence.length > 0);
     contentionsByQuestion.set(q.id, contentions);
-    if (contentionRoute(contentions) === "resolve") {
-      contentionResolved.push({
+    stanceByQuestion.set(q.id, stance);
+    if (questionRoute({ stance, contentions, hasNamedGap }) === "resolve") {
+      stanceResolved.push({
         questionId: q.id,
         retrieve: false,
-        gapCount: 0,
+        gapCount: claims.reduce((s, c) => s + c.missingEvidence.length, 0),
         confidenceSpread: 0,
-        reason: contentions.length
-          ? "interpretive contention — retrieving is futile, reporting the fault line"
-          : "committee agreed — no surviving contention",
+        reason: routeReason(stance, contentions),
       });
     }
   }
@@ -160,13 +212,14 @@ export async function allocateBudget(
     loopIteration: state.loopIteration,
     perQuestion: [...contentionsByQuestion.entries()].map(([questionId, cs]) => ({
       questionId,
+      stance: stanceByQuestion.get(questionId),
       evidential: cs.filter(c => c.type === "evidential").length,
       interpretive: cs.filter(c => c.type === "interpretive").length,
-      resolved: contentionResolved.some(s => s.questionId === questionId),
+      resolved: stanceResolved.some(s => s.questionId === questionId),
     })),
   });
 
-  const zeroCostResolved = [...diminishingResolved, ...contentionResolved];
+  const zeroCostResolved = [...diminishingResolved, ...stanceResolved];
   const zeroCostResolvedIds = new Set(zeroCostResolved.map(s => s.questionId));
   const gateQuestions = unresolved.filter(q => !zeroCostResolvedIds.has(q.id));
 
