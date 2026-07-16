@@ -37,10 +37,14 @@ Preserved disagreement is a first-class output: a committee that "could not agre
 exact fault line" is more honest than a forced consensus.
 
 > **Status:** the debate mechanics (Wave 3, phases D1–D5) and the **agentic retrieval** migration
-> (the `agentic` arm) are both implemented and unit-tested (287 tests green). The live A/B runs that
-> quantify debate-vs-poll and agentic-vs-orchestrated retrieval are still pending a paid run (see
-> [STATUS.md](STATUS.md)). The debate-arena UI that renders the back-and-forth is tracked separately;
-> today's live visualization still shows each role's round-0 claim, not the full transcript.
+> (the `agentic` arm) are both implemented and unit-tested (421 tests green). A live end-to-end
+> agentic run has been verified — real multi-round debate (movement, convergence), all four
+> committee providers (Anthropic/OpenAI/Google) confirmed working, and cost matching the
+> configured rates exactly (see [STATUS.md](STATUS.md)). The formal A/B comparison that quantifies
+> debate-vs-poll and agentic-vs-orchestrated retrieval (`compare-arms.ts` across all three arms) is
+> still pending a paid run. The **question board** (`docs/question-board-spec.md`) now renders the
+> live debate-arena UI — round-0 openings and the full conversational-round transcript, not just
+> each role's final claim.
 
 ---
 
@@ -56,13 +60,15 @@ You need these keys in `.env.local`:
 
 | Var | Where | Used for |
 | --- | --- | --- |
-| `FIRECRAWL_API_KEY` | https://firecrawl.dev | web `/search` + `/scrape` |
-| `OPENAI_API_KEY` | https://platform.openai.com | baseline analysis, triage, skeptic agent |
-| `ANTHROPIC_API_KEY` | https://console.anthropic.com | manager, historian, operator, investor, digest agents |
+| `EXA_API_KEY` | https://dashboard.exa.ai/api-keys | web search (default `SEARCH_PROVIDER`, evidence/config.ts) |
+| `FIRECRAWL_API_KEY` | https://firecrawl.dev | scrape (default `SCRAPE_PROVIDER`) — set alongside `EXA_API_KEY`, not instead of it |
+| `OPENAI_API_KEY` | https://platform.openai.com | baseline analysis, triage, historian + operator committee roles |
+| `ANTHROPIC_API_KEY` | https://console.anthropic.com | manager (intake/decompose), investor committee role, digest, researcher agent, final answer |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | https://aistudio.google.com/apikey | skeptic committee role (Gemini) — a free-tier AI Studio key (no billing account linked) works and is genuinely $0, just rate-limited |
 | `SUPABASE_URL` | Supabase project settings → API | search/scrape/blocklist cache host |
 | `SUPABASE_ANON_KEY` | Supabase project settings → API | cache access (legacy anon JWT `eyJ…`, not a `sb_publishable_…` key) |
 
-Supabase is optional-but-recommended: without it the app still runs, just uncached at full Firecrawl
+Supabase is optional-but-recommended: without it the app still runs, just uncached at full retrieval
 price. Create the schema from [`supabase/schema.sql`](supabase/schema.sql) and add `blindspot` to the
 project's **Exposed schemas**, then confirm with `npm run smoke:supabase`.
 
@@ -73,12 +79,17 @@ npm run compare -- "freight brokerage"                # all three arms
 npx tsx scripts/compare-arms.ts "freight brokerage"   # equivalent
 
 npm run run-arm agentic "freight brokerage"           # one arm: baseline | orchestrated | agentic
-npm run run-arm agentic "freight brokerage" --budget=50   # optional Firecrawl-budget override
+npm run run-arm agentic "freight brokerage" --budget=50               # search/scrape CREDIT cap override
+npm run run-arm agentic "freight brokerage" --usd-budget=0.25         # LLM $ SPEND cap override — independent pool
 ```
+
+`--budget` and `--usd-budget` cap two independent pools — retrieval credits vs. LLM dollars — either
+can run out first; both are optional on `run-arm.ts` and `compare-arms.ts`, and neither applies to
+`baseline` (no graph, no cost tracker).
 
 `compare` runs all **three** arms (baseline, orchestrated, agentic) and lands the output in
 `compare-output/<topic>-<timestamp>.json` as `{ topic, runAt, arms: ArmResult[] }` — each arm's
-report, token usage, Firecrawl costs, and wall-clock time side by side. Everything is fully
+report, token usage, retrieval costs, and wall-clock time side by side. Everything is fully
 standalone (tsx scripts, no Next.js UI needed). Note: the live SSE UI runs only the coded/orchestrated
 arm; agentic live-streaming is out of scope, so the agentic arm is measured via these scripts.
 
@@ -632,8 +643,8 @@ src/
       QuestionTracker.tsx         per-question status card (absorbed into QuestionBoard's row header, kept)
     ScanInput.tsx, ScanProgress.tsx, ReportView.tsx, Gauge.tsx, ...
 scripts/
-  compare-arms.ts                 A/B/C comparison harness — baseline + orchestrated + agentic (accepts --budget)
-  run-arm.ts                      single-arm runner (baseline | orchestrated | agentic, accepts --budget)
+  compare-arms.ts                 A/B/C comparison harness — baseline + orchestrated + agentic (accepts --budget, --usd-budget)
+  run-arm.ts                      single-arm runner (baseline | orchestrated | agentic, accepts --budget, --usd-budget, --stream)
   supabase-smoke.ts               live (free) round-trip check of the Supabase cache
   migrate-caches.mjs              one-time seed of Supabase from the legacy data/*.json files
 supabase/
@@ -653,16 +664,16 @@ Zero-cost checks (no API credits — run these to confirm the build):
 
 ```bash
 npx tsc --noEmit       # typecheck
-npx vitest run         # unit tests (420 green)
+npx vitest run         # unit tests (421 green)
 npm run smoke:supabase # verify the Supabase cache round-trips (live but free)
 ```
 
 Paid / live runs (spend API credits — the real functional check of the pipeline):
 
 ```bash
-npm run dev                                     # dev server at http://localhost:3000 (coded arm in the UI)
+npm run dev                                     # dev server at http://localhost:3000 (agentic arm in the live UI)
 npm run run-arm agentic "freight brokerage"     # one arm: baseline | orchestrated | agentic
-npm run run-arm agentic "freight brokerage" --budget=50   # Firecrawl-budget override (--budget=N, not a space)
+npm run run-arm agentic "freight brokerage" --budget=50 --usd-budget=0.25   # both are --flag=N, not a space
 npm run compare -- "freight brokerage"          # all three arms → compare-output/<topic>-<ts>.json
 ```
 

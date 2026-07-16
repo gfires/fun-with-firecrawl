@@ -250,6 +250,45 @@ reducer, graph-stream emission, and cell-derivation logic against ground truth i
 mechanics receipt. Regenerate with `npx tsx scripts/run-arm.ts agentic "<topic>" --stream` +
 `npx tsx scripts/extract-replay-fixture.ts` when convenient.
 
+**Live-run validation + hardening (2026-07-16), same branch.** The human ran real paid agentic runs
+against the live providers to answer "are we actually ready to run" — three real failures found and
+fixed, one full clean run confirmed every provider and price correct.
+
+- **Google billing, not a bug**: first run hit `429 RESOURCE_EXHAUSTED — prepayment credits
+  depleted`. Root cause: the project's API key had a billing account linked with $0 prepay balance
+  — Google does NOT fall back to the free tier when that happens, it just stops serving. Fixed by
+  swapping to a free-tier key (no billing account); `gemini-3.1-flash-lite` now correctly priced at
+  $0/$0 in `pricing.ts` (confirmed genuinely free, not a promotional credit).
+- **Anthropic 529 "Overloaded" root-caused, not just retried**: two further runs died on
+  `claude-sonnet-5` (the investor role) after 5 retries. Every `generateText()` call in the
+  orchestration layer except the answer/synthesis call left `maxOutputTokens` unset, so the AI SDK
+  requested the model's 128k default on EVERY call — a `ClaimOutputSchema` object needs a few
+  hundred tokens. New `STRUCTURED_OUTPUT_MAX_TOKENS = 8000` (params.ts) applied to committee.ts
+  (both opening and debate-turn calls), digest.ts, graph.ts (intake + decompose), and researcher.ts
+  — every Anthropic call site that lacked a ceiling. `gate.ts` untouched (OpenAI, not Anthropic).
+- **`--usd-budget` CLI flag** (`run-arm.ts`, `compare-arms.ts`): `runWithCostTracker()` already took
+  an optional cap override; nothing threaded it from the CLI. Independent of the credit `--budget` —
+  either pool can run out first.
+- **Clean run confirmed end-to-end** after both fixes: real 2-round debate (movement + clean
+  convergence), all four committee providers succeeded, and the reported `$0.1884` total matched an
+  independent recomputation from the raw trace's token usage against `pricing.ts`'s rates exactly —
+  Sonnet ($2/$10), gpt-5.4-mini ($0.75/$4.50), Haiku ($1/$5), Gemini ($0/$0) are genuinely what gets
+  billed, not stale numbers.
+- **Two more real mechanics.ts bugs found reading that same output closely**: `capUsd` was
+  hardcoded to `MAX_RUN_COST_USD`, never the tracker's actual (possibly `--usd-budget`-overridden)
+  cap — fixed via a new `CostTracker.getCap()` accessor. The RETRIEVAL line said "firecrawl N calls"
+  for what's actually combined Exa (search) + Firecrawl (scrape) credits post the provider split —
+  the word was wrong everywhere it appeared (CLI report, `CostCounter.tsx`, `ResearchReportView.tsx`,
+  `ReportView.tsx`'s baseline UI too, same pipeline) — changed to "retrieval" throughout; field names
+  (`firecrawlCalls`/`firecrawlCredits`) left alone (a real rename is separate, bigger work).
+- **Model-id config completeness**: `managerModel`/`gateModel`/`gateClassifierModel`/`digestModel`
+  were the last inline string literals in `models/provider.ts` — every other model choice already
+  lived in a named params.ts/roles.ts constant. Extracted to `MANAGER_MODEL_ID`/`ANSWER_MODEL_ID`/
+  `GATE_CLASSIFIER_MODEL_ID`/`DIGEST_MODEL_ID`, same pattern as the pre-existing
+  `RESEARCHER_MODEL_ID`, so swapping any tier is a one-line params.ts edit.
+
+tsc clean, next build clean, 421 vitest green across all of the above.
+
 ## Open issues
 
 - None blocking. Historian confabulation fix confirmed live (2026-07-14 traces: round-0 claims cite ids). Previous schema-crash, silent-retrieve, and cost-overcount issues resolved — see Done / Wave 2.
