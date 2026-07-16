@@ -184,6 +184,49 @@ then stopped cleanly on `cost-headroom`. Deliberation share ~67% (cache-aware). 
 double-gated (`questionsNeedingDebate` new-evidence gate + Phase A disagreement gate), so the loop-1 spend was
 warranted, not waste — the $ lever scales with how many questions genuinely agree, which is topic-dependent.
 
+## Question board — question-centric UI (branch `question-board-spec`)
+
+**Built (Phases 1-5), `tsc` clean, `next build` clean, 409 vitest green.** Spec
+`docs/question-board-spec.md`. Replaces the node-centric `ResearchProgress` dashboard (organized by
+pipeline stage — all questions' evidence, then all questions' debate, then all gate decisions) with
+`QuestionBoard`: one swimlane per question, five lifecycle-stage columns (Recon → Openings →
+Deliberation → Gate → Loop), click-to-drill-down. Nothing thrown away — the nine existing
+components recompose as drill-downs; three are new.
+
+- **Phase 1 — shell + derived data**: `debateOutcome`/`debateRounds` added to `QuestionStatus` (set
+  at `debate:begin`/`debate:claim` — the skip-vs-debate signal the reducer previously dropped).
+  Stance chips read `committeeStance`/`hasGenuineDisagreement` straight from `orchestration/debate.ts`
+  client-side (pure, no server deps — no new module needed). New `StanceDots`, `PipelineMinimap`,
+  `QuestionBoard` (swimlane grid + drill-down router); `ResearchProgress.tsx` retired in its favor.
+- **Phase 2 — real openings + rounds** (`research-events.ts`, `graph-stream.ts`): new
+  `debate:opening`/`debate:round` events — the one real gap, since only final claims streamed
+  before. `transcriptToEvents()` walks the debate node's per-loop `debateTranscripts` output (round 0
+  → one opening event per role, rounds ≥1 → one event per round); the node stays unaware of the wire
+  protocol. Reducer accumulates `openingsByQuestion`/`roundsByQuestion`, REPLACING per question on a
+  new loop (detected off `claim.loopIteration`) to mirror the graph's `mergeTranscripts` semantics.
+  `AgentSwimlane` repurposed as the deliberation drill-down's round-by-round timeline (new
+  `debateRoundCells` in `arena.ts`, keyed by `debateRound` instead of the outer loop).
+- **Phase 3 — window-shopping mini-viz** (`WindowShopStrip`): `researcherByQuestion` accumulates one
+  `ResearcherPass` per `researcher:begin`, closed by `researcher:done` — the Loop cell's compact
+  strip and the Loop drill-down's full researcher trace (mission → search → read, `capped`/
+  `hitCeiling` flags included).
+- **Phase 4 — replay** (`useResearchReplay`, `/api/research/replay`, `/replay`): drives the SAME
+  `reduce` over a pre-recorded event array behind a play/pause/scrub/speed controller — the board
+  needs zero changes, it's a pure function of reduced state. Trace source: an API route serving the
+  committed fixture (`test/fixtures/replay-events.json`), decided over a client-bundled import to
+  keep the fixture out of the client bundle.
+- **Phase 5 — run-mechanics receipt** (`RunMechanicsReceipt`): a new terminal `research:mechanics`
+  SSE event puts `computeRunMechanics`'s already-computed output on the wire (previously only
+  reachable via the batch `ArmResult`). `mechanics.ts` itself untouched — pure read + wiring.
+  `RunMechanicsReceipt` reads `RunMechanics` fields directly rather than calling
+  `formatMechanicsReport`, since that's a VALUE import and would drag the module's server-only
+  dependency chain (`trace.ts`'s `fs/promises`, `cost-tracker.ts`'s `async_hooks`) into the client
+  bundle — caught by `next build`, not `tsc`/`vitest`, so worth calling out for the next person
+  wiring orchestration data into a client component.
+
+Not yet live-verified against a real run in the browser (dogfooded via `next build` + the bundled
+replay fixture only) — the human should click through a live run before merging.
+
 ## Open issues
 
 - None blocking. Historian confabulation fix confirmed live (2026-07-14 traces: round-0 claims cite ids). Previous schema-crash, silent-retrieve, and cost-overcount issues resolved — see Done / Wave 2.
