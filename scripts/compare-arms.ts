@@ -4,6 +4,7 @@
  * Usage:
  *   npm run compare -- "veterinary telemedicine"
  *   npx tsx scripts/compare-arms.ts "veterinary telemedicine"
+ *   npx tsx scripts/compare-arms.ts "veterinary telemedicine" --budget=50 --usd-budget=0.5
  *
  * Requires OPENAI_API_KEY and FIRECRAWL_API_KEY (loaded from .env.local automatically).
  * Output: compare-output/<topic-slug>-<timestamp>.json
@@ -12,6 +13,10 @@
  * (agentic retrieval) — each with the full report and a tokens block (per-call usage +
  * total cost). Diff them by eye or in a JSON viewer. When graph.ts isn't available, the
  * graph arms are skipped with a logged note.
+ *
+ * `--budget=N` caps search/scrape CREDITS (TOTAL_RETRIEVAL_BUDGET, params.ts); `--usd-budget=N`
+ * caps LLM $ SPEND (MAX_RUN_COST_USD) — independent pools, applied to both graph arms (the
+ * baseline arm has no cost tracker, so neither applies to it).
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
@@ -31,25 +36,31 @@ import { formatMechanicsReport } from "../src/lib/orchestration/mechanics";
 
 const cliArgs = process.argv.slice(2);
 const budgetFlag = cliArgs.find((a) => a.startsWith("--budget="));
-const positional = cliArgs.filter((a) => !a.startsWith("--budget="));
+const usdBudgetFlag = cliArgs.find((a) => a.startsWith("--usd-budget="));
+const positional = cliArgs.filter((a) => !a.startsWith("--budget=") && !a.startsWith("--usd-budget="));
 
 const topic = positional[0]?.trim();
 if (!topic) {
-  console.error("Usage: tsx scripts/compare-arms.ts <topic> [--budget=N]");
+  console.error("Usage: tsx scripts/compare-arms.ts <topic> [--budget=N] [--usd-budget=N]");
   console.error('Example: tsx scripts/compare-arms.ts "commercial real estate" --budget=50');
   process.exit(1);
 }
 
-let budgetOverride: number | undefined;
-if (budgetFlag) {
-  budgetOverride = Number(budgetFlag.slice("--budget=".length));
-  if (!Number.isFinite(budgetOverride) || budgetOverride <= 0) {
-    console.error(`Invalid --budget value: ${budgetFlag}`);
+function parsePositiveFlag(flag: string, prefix: string): number | undefined {
+  const value = Number(flag.slice(prefix.length));
+  if (!Number.isFinite(value) || value <= 0) {
+    console.error(`Invalid ${prefix.replace(/=$/, "")} value: ${flag}`);
     process.exit(1);
   }
+  return value;
 }
 
-type RunGraph = (t: string, budget?: number, mode?: "coded" | "agentic") => Promise<ArmResult>;
+const budgetOverride: number | undefined = budgetFlag ? parsePositiveFlag(budgetFlag, "--budget=") : undefined;
+const usdBudgetOverride: number | undefined = usdBudgetFlag
+  ? parsePositiveFlag(usdBudgetFlag, "--usd-budget=")
+  : undefined;
+
+type RunGraph = (t: string, budget?: number, mode?: "coded" | "agentic", usdBudget?: number) => Promise<ArmResult>;
 
 /**
  * Run one graph arm (coded → "orchestrated", agentic → "agentic"). Returns null and logs a
@@ -66,7 +77,7 @@ async function runGraphArm(
     const mod = await import("../src/lib/orchestration/graph");
     const fn = (mod as { runGraph?: RunGraph }).runGraph;
     if (typeof fn !== "function") throw new Error("runGraph not exported");
-    return await fn(t, budgetOverride, mode);
+    return await fn(t, budgetOverride, mode, usdBudgetOverride);
   } catch (err) {
     console.log(
       `      SKIPPED (${label}) — ${err instanceof Error ? err.message : String(err)}`,

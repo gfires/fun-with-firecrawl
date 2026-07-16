@@ -52,10 +52,16 @@ export function runGraphStreaming(
   // per-question `researcher:*` progress the UI renders. `runGraph` (non-streaming) defaults to
   // "coded" as the eval control; the live/streaming surface defaults to "agentic" on purpose.
   retrievalMode: RetrievalMode = "agentic",
+  // Overrides MAX_RUN_COST_USD (params.ts) for this run — the LLM $ cap, independent of
+  // budgetOverride (the search/scrape CREDIT cap). Undefined keeps the default.
+  usdBudgetOverride?: number,
 ): Promise<ArmResult> {
   // Per-run cost tracker via AsyncLocalStorage — see runWithCostTracker. Isolates
   // this run's spend from any other concurrent run in the same process.
-  return runWithCostTracker(() => runGraphStreamingInner(topic, send, budgetOverride, retrievalMode));
+  return runWithCostTracker(
+    () => runGraphStreamingInner(topic, send, budgetOverride, retrievalMode),
+    usdBudgetOverride,
+  );
 }
 
 async function runGraphStreamingInner(

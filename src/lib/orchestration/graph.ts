@@ -913,11 +913,14 @@ export function runGraph(
   topic: string,
   budgetOverride?: number,
   retrievalMode: RetrievalMode = "coded",
+  // Overrides MAX_RUN_COST_USD (params.ts) for this run — the LLM $ cap, independent of
+  // budgetOverride (the search/scrape CREDIT cap). Undefined keeps the default.
+  usdBudgetOverride?: number,
 ): Promise<ArmResult> {
   // Run the whole graph inside a per-run cost tracker (AsyncLocalStorage) so every
   // getActiveCostTracker() in the async tree resolves to THIS run's tracker — two
   // concurrent runs never share or clobber each other's spend.
-  return runWithCostTracker(() => runGraphInner(topic, budgetOverride, retrievalMode));
+  return runWithCostTracker(() => runGraphInner(topic, budgetOverride, retrievalMode), usdBudgetOverride);
 }
 
 async function runGraphInner(
