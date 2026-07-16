@@ -227,6 +227,29 @@ components recompose as drill-downs; three are new.
 Not yet live-verified against a real run in the browser (dogfooded via `next build` + the bundled
 replay fixture only) — the human should click through a live run before merging.
 
+**Review pass (Opus 4.8, post-rebase onto `409364f`'s search/scrape provider split):** traced the
+reducer, graph-stream emission, and cell-derivation logic against ground truth in
+`debate.ts`/`gate.ts`/`researcher.ts` and found three real bugs, all fixed:
+- `retrieve:evidence` was keyed by the raw search-query text instead of the question id, so
+  `evidenceByQuestion` never matched a question on the agentic arm — every Recon cell read "0 src".
+  Fixed to prefer `evidence.questionId` (researcher.ts always tags it), mirroring
+  `scopeEvidenceToQuestions`'s own identity-first scoping.
+- The hero "openings agreed, rounds skipped" case was mislabeled "🗣 opening..." (reads as still
+  in progress); `deliberationLabel` (moved into `board.ts`, now pure/tested) now distinguishes
+  still-arriving from genuinely-finished-with-0-rounds, and gives the *actually*-different
+  graph-level "no fresh evidence this loop" case its own honest label.
+- `gateVerdict` collapsed every non-retrieve resolve into "✔ settled", including
+  insufficient-with-no-gap and diminishing-returns resolves (gate.ts's own "nothing to retrieve"
+  limitations). New `"limitation"` verdict distinguishes them from a genuine unanimous lean; fixing
+  it also surfaced that the Gate cell's stance was computed over a question's entire claim
+  history instead of its current loop's position (new `currentCommitteeClaims()` in `board.ts`).
+
+**Known gap, not fixed (costs a paid run to fix):** the committed replay fixture
+(`test/fixtures/replay-events.json`) predates Phases 2/5 — zero `debate:opening`/`debate:round`/
+`research:mechanics` events — so `/replay` doesn't exercise the openings/rounds timeline or the
+mechanics receipt. Regenerate with `npx tsx scripts/run-arm.ts agentic "<topic>" --stream` +
+`npx tsx scripts/extract-replay-fixture.ts` when convenient.
+
 ## Open issues
 
 - None blocking. Historian confabulation fix confirmed live (2026-07-14 traces: round-0 claims cite ids). Previous schema-crash, silent-retrieve, and cost-overcount issues resolved — see Done / Wave 2.

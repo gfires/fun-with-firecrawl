@@ -33,11 +33,15 @@ Adaptive multi-agent research system on top of a Next.js/TypeScript Firecrawl ap
 | `src/lib/params.ts` | Orchestration/gate-policy tunables (`TOTAL_RETRIEVAL_BUDGET` — ONE combined search+scrape credit cap, incl. per-loop reservation + $ cap, thresholds, loop limits, digest, prompt-cache, debate rounds, movement epsilon). Search/scrape MECHANICS tunables live in evidence/config.ts; role/model config lives in roles.ts + pricing.ts |
 | `src/lib/prompts.ts` | Home for non-role-persona LLM prompt WORDING (CONFIDENCE_CALIBRATION, intake/decompose/digest/committee/debate/gate/answer builders). Nodes keep state-shaping; wording lives here. Role personas live in roles.ts |
 | `scripts/compare-arms.ts` | A/B comparison harness (accepts --budget) |
-| `src/lib/research-events.ts` | ResearchEvent union (SSE wire protocol for orchestration) |
-| `src/lib/orchestration/graph-stream.ts` | runGraphStreaming() — streaming graph runner |
+| `src/lib/research-events.ts` | ResearchEvent union (SSE wire protocol for orchestration), incl. `debate:opening`/`debate:round` (blind opening + conversational rounds) and the terminal `research:mechanics` |
+| `src/lib/orchestration/graph-stream.ts` | runGraphStreaming() — streaming graph runner; `transcriptToEvents()` maps the debate node's per-loop transcripts to `debate:opening`/`debate:round` |
 | `src/lib/useResearchStream.ts` | Frontend hook + reducer for research SSE |
+| `src/lib/useResearchReplay.ts` | Drives the SAME reducer over a static pre-recorded event array behind play/pause/scrub/speed |
+| `src/lib/research/board.ts` | Pure cell-derivation helpers for `QuestionBoard` (stance/verdict/scoping) — no LLM calls, unit-tested |
+| `src/lib/research/arena.ts` | `DebateArena`/`AgentSwimlane` pure graph + swimlane-cell builders (`debateRoundCells` keys by `debateRound`) |
 | `src/app/api/research/orchestrated/route.ts` | SSE endpoint for orchestrated research |
-| `src/components/research/` | Visualization components (PipelineGraph, AgentPanel, etc.) |
+| `src/app/api/research/replay/route.ts` | Serves the committed replay fixture (`test/fixtures/replay-events.json`) |
+| `src/components/research/QuestionBoard.tsx` | Top-level question-centric swimlane board (`docs/question-board-spec.md`) — replaces the old `ResearchProgress`; recomposes the other research components as drill-downs |
 | `scripts/run-arm.ts` | Single-arm runner (baseline or orchestrated, accepts --budget) |
 | `src/lib/orchestration/trace.ts` | TraceLogger — exhaustive run trace (prompts, responses, state) |
 
