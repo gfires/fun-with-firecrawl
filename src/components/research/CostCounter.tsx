@@ -26,7 +26,7 @@ export function CostCounter({ usage }: Props) {
       </span>
       <span className="text-line">|</span>
       <span>
-        firecrawl: <span className="nums text-fg/70">{usage.firecrawlCredits}</span> credits
+        retrieval: <span className="nums text-fg/70">{usage.firecrawlCredits}</span> credits
       </span>
     </div>
   );

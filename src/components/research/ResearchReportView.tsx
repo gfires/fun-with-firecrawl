@@ -116,7 +116,7 @@ export function ResearchReportView({ report, scan, onReset }: Props) {
         <div className="flex flex-wrap gap-4 font-mono text-xs text-mute">
           <span>tokens: <span className="nums text-fg">{(scan.usage.totalPromptTokens + scan.usage.totalCompletionTokens).toLocaleString()}</span></span>
           <span>cost: <span className="nums text-fg">${scan.usage.totalCostUsd.toFixed(4)}</span></span>
-          <span>firecrawl: <span className="nums text-fg">{scan.usage.firecrawlCredits} credits</span></span>
+          <span>retrieval: <span className="nums text-fg">{scan.usage.firecrawlCredits} credits</span></span>
           <span>llm calls: <span className="nums text-fg">{scan.usage.calls.length}</span></span>
         </div>
         {scan.usage.calls.length > 0 && (

@@ -31,7 +31,10 @@ export function RunMechanicsReceipt({ mechanics }: Props) {
         <span className="text-line">·</span>
         <span>
           evidence <span className="nums text-fg">{r.evidenceTotal}</span> (
-          <span className="nums text-fg">{r.evidencePerCredit.toFixed(2)}</span>/credit)
+          <span className="nums text-fg">{r.evidencePerCredit.toFixed(2)}</span>/credit) —{" "}
+          <span className="nums text-fg">{r.searchOps}</span> search /{" "}
+          <span className="nums text-fg">{r.scrapeOps}</span> scrape /{" "}
+          <span className="nums text-fg">{r.cacheHits}</span> cache-hit
         </span>
         <span className="text-line">·</span>
         <span>
