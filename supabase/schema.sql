@@ -49,3 +49,28 @@ create policy "cache anon rw" on blindspot.cache
   for all to anon, authenticated using (true) with check (true);
 create policy "blocklist anon rw" on blindspot.blocklist
   for all to anon, authenticated using (true) with check (true);
+
+-- Past Research-mode runs, persisted for the /replay browser (real prior runs, not just the
+-- bundled demo fixture). `mode` is deliberately omitted: this table is Research-mode only
+-- (the baseline "Scan" arm has no per-request budget overrides to record).
+create table if not exists blindspot.research_runs (
+  id                uuid primary key default gen_random_uuid(),
+  topic             text not null,
+  status            text not null check (status in ('completed', 'errored')),
+  started_at        timestamptz not null,
+  finished_at       timestamptz not null default now(),
+  budget            integer,   -- retrieval credit override actually applied; null = server default
+  usd_budget        numeric,   -- LLM $ cap override actually applied; null = server default
+  total_cost_usd    numeric,   -- actual $ spent (from the cost tracker / RunMechanics)
+  firecrawl_credits integer,   -- actual retrieval credits spent
+  events            jsonb not null,  -- ResearchEvent[] — everything the replay UI needs to scrub/play
+  mechanics         jsonb            -- RunMechanics snapshot, for a list view without loading `events`
+);
+
+create index if not exists research_runs_started_at_idx
+  on blindspot.research_runs (started_at desc);
+
+alter table blindspot.research_runs enable row level security;
+drop policy if exists "research_runs anon rw" on blindspot.research_runs;
+create policy "research_runs anon rw" on blindspot.research_runs
+  for all to anon, authenticated using (true) with check (true);

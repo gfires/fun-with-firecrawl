@@ -31,6 +31,15 @@ export function useResearchReplay(events: ResearchEvent[]): ResearchReplay {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
 
+  // A caller switching to a different recorded run passes a new `events` array (reference
+  // identity, e.g. /replay's run picker) — reset playback rather than resuming mid-stream or
+  // showing the new run as already finished. Callers passing a stable reference across renders
+  // (unchanged run) are unaffected.
+  useEffect(() => {
+    setIndex(-1);
+    setPlaying(false);
+  }, [events]);
+
   const state = useMemo(
     () => events.slice(0, index + 1).reduce(reduce, initialResearchState),
     [events, index],

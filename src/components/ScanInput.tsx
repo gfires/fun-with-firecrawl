@@ -1,13 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { TOTAL_RETRIEVAL_BUDGET, MAX_RUN_COST_USD } from "@/lib/params";
+import { shouldSubmitOnKeyDown, parseBudgetInput } from "@/lib/scan-input-utils";
 
 export type RunMode = "scan" | "research";
 
 const EXAMPLES = ["college athletics", "construction permitting", "insurance claims", "industrial ergonomics"];
 
+// Blast-radius guards on client-side budget overrides — no server-side ceiling exists yet.
+const MAX_RETRIEVAL_BUDGET = 500;
+const MAX_USD_BUDGET = 10 * MAX_RUN_COST_USD;
+
 interface Props {
-  onRun: (industry: string) => void;
+  onRun: (industry: string, budget?: number, usdBudget?: number) => void;
   disabled?: boolean;
   mode: RunMode;
   onModeChange: (mode: RunMode) => void;
@@ -15,10 +21,23 @@ interface Props {
 
 export function ScanInput({ onRun, disabled, mode, onModeChange }: Props) {
   const [value, setValue] = useState("");
+  const [budgetRaw, setBudgetRaw] = useState("");
+  const [usdBudgetRaw, setUsdBudgetRaw] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const run = () => {
     const v = value.trim();
-    if (v) onRun(v);
+    if (!v) return;
+    onRun(
+      v,
+      parseBudgetInput(budgetRaw, { max: MAX_RETRIEVAL_BUDGET }),
+      parseBudgetInput(usdBudgetRaw, { max: MAX_USD_BUDGET }),
+    );
+  };
+
+  const autoGrow = (el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
   };
 
   return (
@@ -56,18 +75,29 @@ export function ScanInput({ onRun, disabled, mode, onModeChange }: Props) {
 
       <div className="mt-4 flex items-stretch gap-2">
         <div className="relative flex-1">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-accent">
+          <span className="pointer-events-none absolute left-3 top-3 font-mono text-accent">
             &gt;
           </span>
-          <input
+          <textarea
+            ref={textareaRef}
             autoFocus
+            rows={1}
             value={value}
             disabled={disabled}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && run()}
+            onChange={(e) => {
+              setValue(e.target.value);
+              autoGrow(e.target);
+            }}
+            onKeyDown={(e) => {
+              if (shouldSubmitOnKeyDown(e.key, e.shiftKey)) {
+                e.preventDefault();
+                run();
+              }
+            }}
             placeholder={mode === "research" ? "enter a topic…" : "enter an industry…"}
-            className="w-full rounded-lg border border-line bg-panel py-3 pl-9 pr-3 font-mono text-fg
-                       placeholder:text-mute focus:border-accent focus:outline-none disabled:opacity-50"
+            className="max-h-40 w-full resize-none overflow-y-auto rounded-lg border border-line bg-panel
+                       py-3 pl-9 pr-3 font-mono text-fg placeholder:text-mute focus:border-accent
+                       focus:outline-none disabled:opacity-50"
           />
         </div>
         <button
@@ -79,6 +109,38 @@ export function ScanInput({ onRun, disabled, mode, onModeChange }: Props) {
           {mode === "research" ? "Run Research" : "Run Scan"}
         </button>
       </div>
+
+      {mode === "research" && (
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-4 font-mono text-xs text-mute">
+          <label className="flex items-center gap-2">
+            <span>Retrieval budget (credits)</span>
+            <input
+              type="number"
+              min={1}
+              disabled={disabled}
+              value={budgetRaw}
+              onChange={(e) => setBudgetRaw(e.target.value)}
+              placeholder={String(TOTAL_RETRIEVAL_BUDGET)}
+              className="w-20 rounded border border-line bg-panel px-2 py-1 font-mono text-xs text-fg
+                         placeholder:text-mute focus:border-accent focus:outline-none disabled:opacity-50"
+            />
+          </label>
+          <label className="flex items-center gap-2">
+            <span>LLM budget ($)</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              disabled={disabled}
+              value={usdBudgetRaw}
+              onChange={(e) => setUsdBudgetRaw(e.target.value)}
+              placeholder={String(MAX_RUN_COST_USD)}
+              className="w-20 rounded border border-line bg-panel px-2 py-1 font-mono text-xs text-fg
+                         placeholder:text-mute focus:border-accent focus:outline-none disabled:opacity-50"
+            />
+          </label>
+        </div>
+      )}
 
       <div className="mt-4 flex flex-wrap justify-center gap-2">
         {EXAMPLES.map((ex) => (

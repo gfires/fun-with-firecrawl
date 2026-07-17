@@ -23,8 +23,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from "f
 import { join } from "path";
 import type { ResearchEvent } from "../src/lib/research-events";
 import { reduce, initialResearchState } from "../src/lib/useResearchStream";
-
-const EVIDENCE_CONTENT_CAP = 800; // chars kept per source in the fixture (snippet/title stay whole)
+import { slimReplayEvent } from "../src/lib/orchestration/replay-slim";
 
 function newestTrace(dir: string): string {
   const files = readdirSync(dir)
@@ -35,14 +34,6 @@ function newestTrace(dir: string): string {
   return join(dir, files[0].f);
 }
 
-/** Shrink the parts of the event stream that bloat the committed file without adding UI signal. */
-function slim(event: ResearchEvent): ResearchEvent {
-  if (event.type === "retrieve:evidence") {
-    return { ...event, evidence: { ...event.evidence, content: event.evidence.content.slice(0, EVIDENCE_CONTENT_CAP) } };
-  }
-  return event;
-}
-
 function main() {
   const [inArg, outArg] = process.argv.slice(2);
   const tracePath = inArg ?? newestTrace(join(process.cwd(), "trace-output"));
@@ -51,7 +42,7 @@ function main() {
   const entries = JSON.parse(readFileSync(tracePath, "utf8")) as { type: string; data: unknown }[];
   const events = entries
     .filter((e) => typeof e.type === "string" && e.type.startsWith("sse:"))
-    .map((e) => slim(e.data as ResearchEvent));
+    .map((e) => slimReplayEvent(e.data as ResearchEvent));
 
   if (events.length === 0) {
     console.error(

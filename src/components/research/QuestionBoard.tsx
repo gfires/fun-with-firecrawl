@@ -15,7 +15,8 @@ import {
   deliberationLabel,
   type GateVerdict,
 } from "@/lib/research/board";
-import { PipelineMinimap } from "./PipelineMinimap";
+import { PipelineGraph } from "./PipelineGraph";
+import { ActivityTicker } from "./ActivityTicker";
 import { StanceDots } from "./StanceDots";
 import { CostCounter } from "./CostCounter";
 import { DebateArena } from "./DebateArena";
@@ -47,7 +48,9 @@ const GATE_VERDICT_STYLE: Record<GateVerdict, { label: string; cls: string }> = 
   retrieve: { label: "↻ retrieve +gap", cls: "text-amber" },
 };
 
-type Stage = "recon" | "openings" | "deliberation" | "gate" | "loop";
+const COLUMNS = "minmax(180px,1fr) repeat(5, minmax(120px,1fr))";
+
+type Stage = "question" | "recon" | "openings" | "deliberation" | "gate" | "loop";
 interface DrillDown {
   questionId: string;
   stage: Stage;
@@ -127,10 +130,7 @@ function QuestionRow({ q, state, drill, onToggle }: RowProps) {
   const isDrilled = (stage: Stage) => drill?.questionId === qid && drill.stage === stage;
 
   return (
-    <div
-      className="grid gap-2"
-      style={{ gridTemplateColumns: "minmax(180px,1fr) repeat(5, minmax(120px,1fr))" }}
-    >
+    <div className="grid gap-2" style={{ gridTemplateColumns: COLUMNS }}>
       {/* Row header — absorbed QuestionTracker */}
       <div className="panel space-y-1.5 p-2.5">
         <div className="flex items-start justify-between gap-2">
@@ -138,7 +138,13 @@ function QuestionRow({ q, state, drill, onToggle }: RowProps) {
             <span className="font-mono text-[10px] text-mute">{qid}</span>
             <span className="mx-1 text-line">·</span>
             <span className="text-[10px] text-fg/70">{q.question.category}</span>
-            <p className="mt-0.5 text-xs leading-snug text-fg">{q.question.text}</p>
+            <button
+              onClick={() => onToggle(qid, "question")}
+              className="mt-0.5 line-clamp-2 text-left text-xs leading-snug text-fg transition hover:text-accent"
+              title="click for full question"
+            >
+              {q.question.text}
+            </button>
           </div>
           <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${s.cls}`}>
             {s.label}
@@ -200,70 +206,88 @@ interface DrillDownPanelProps {
   drill: DrillDown;
   state: ResearchUIState;
   onClose: () => void;
+  onSelectQuestion: (questionId: string) => void;
 }
 
-function DrillDownPanel({ drill, state, onClose }: DrillDownPanelProps) {
+function DrillDownPanel({ drill, state, onClose, onSelectQuestion }: DrillDownPanelProps) {
   const { questionId, stage } = drill;
   const openingClaimsByRole = indexClaimsByRole(openingClaimsFor(state, questionId));
+  const question = state.questions.find((q) => q.question.id === questionId)?.question;
 
   return (
-    <div className="panel space-y-3 p-4">
-      <div className="flex items-center justify-between">
-        <div className="eyebrow">
-          {questionId} · {stage}
+    <div
+      className="fixed inset-0 z-30 flex items-end justify-center bg-ink/70 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[70vh] w-full max-w-6xl animate-rise overflow-y-auto rounded-t-xl border border-line
+                   border-b-0 bg-panel p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <div className="eyebrow">
+            {questionId} · {stage}
+          </div>
+          <button onClick={onClose} className="text-xs text-mute hover:text-fg">
+            close ✕
+          </button>
         </div>
-        <button onClick={onClose} className="text-xs text-mute hover:text-fg">
-          close ✕
-        </button>
-      </div>
 
-      {stage === "recon" ? (
-        <EvidenceFeed evidence={state.evidenceByQuestion[questionId] ?? []} loopIteration={state.loopIteration} />
-      ) : stage === "loop" ? (
-        <div className="space-y-3">
-          <WindowShopStrip passes={state.researcherByQuestion[questionId] ?? []} />
+        {stage === "question" ? (
+          <div className="space-y-2">
+            {question && (
+              <div className="text-[10px] text-fg/70">{question.category}</div>
+            )}
+            <p className="text-base leading-relaxed text-fg">{question?.text}</p>
+          </div>
+        ) : stage === "recon" ? (
           <EvidenceFeed evidence={state.evidenceByQuestion[questionId] ?? []} loopIteration={state.loopIteration} />
-        </div>
-      ) : stage === "openings" ? (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          {(Object.keys(openingClaimsByRole) as AgentRoleT[]).map((role) => {
-            const claim = openingClaimsByRole[role];
-            if (!claim) return null;
-            return (
-              <div key={role} className="rounded border border-line bg-panel2 p-2.5 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="eyebrow text-[10px]">{ROLE_LABELS[role]}</span>
-                  <span className="nums text-[11px] text-fg/70">{claim.confidence.toFixed(2)}</span>
+        ) : stage === "loop" ? (
+          <div className="space-y-3">
+            <WindowShopStrip passes={state.researcherByQuestion[questionId] ?? []} />
+            <EvidenceFeed evidence={state.evidenceByQuestion[questionId] ?? []} loopIteration={state.loopIteration} />
+          </div>
+        ) : stage === "openings" ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {(Object.keys(openingClaimsByRole) as AgentRoleT[]).map((role) => {
+              const claim = openingClaimsByRole[role];
+              if (!claim) return null;
+              return (
+                <div key={role} className="rounded border border-line bg-panel2 p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="eyebrow text-[10px]">{ROLE_LABELS[role]}</span>
+                    <span className="nums text-[11px] text-fg/70">{claim.confidence.toFixed(2)}</span>
+                  </div>
+                  <p className="text-[11px] leading-snug text-fg">{claim.conclusion}</p>
+                  <span className="font-mono text-[9px] uppercase text-mute">{claim.stance}</span>
                 </div>
-                <p className="text-[11px] leading-snug text-fg">{claim.conclusion}</p>
-                <span className="font-mono text-[9px] uppercase text-mute">{claim.stance}</span>
-              </div>
-            );
-          })}
-          {Object.keys(openingClaimsByRole).length === 0 && (
-            <p className="text-xs text-mute">awaiting openings...</p>
-          )}
-        </div>
-      ) : stage === "deliberation" ? (
-        <div className="space-y-3">
-          <DebateArena
-            claimsByQuestion={state.claimsByQuestion}
-            evidenceByQuestion={state.evidenceByQuestion}
-            questions={state.questions}
-            activeNode={state.activeNode}
-            activeQuestionId={questionId}
-            onSelectQuestion={() => {}}
-          />
-          <AgentSwimlane
-            openings={state.openingsByQuestion[questionId] ?? []}
-            rounds={state.roundsByQuestion[questionId] ?? []}
-            questionId={questionId}
-            activeNode={state.activeNode}
-          />
-        </div>
-      ) : (
-        <GateDecisionPanel decisions={scopeGateDecisionsToQuestion(state.gateDecisions, questionId)} />
-      )}
+              );
+            })}
+            {Object.keys(openingClaimsByRole).length === 0 && (
+              <p className="text-xs text-mute">awaiting openings...</p>
+            )}
+          </div>
+        ) : stage === "deliberation" ? (
+          <div className="space-y-3">
+            <DebateArena
+              claimsByQuestion={state.claimsByQuestion}
+              evidenceByQuestion={state.evidenceByQuestion}
+              questions={state.questions}
+              activeNode={state.activeNode}
+              activeQuestionId={questionId}
+              onSelectQuestion={onSelectQuestion}
+            />
+            <AgentSwimlane
+              openings={state.openingsByQuestion[questionId] ?? []}
+              rounds={state.roundsByQuestion[questionId] ?? []}
+              questionId={questionId}
+              activeNode={state.activeNode}
+            />
+          </div>
+        ) : (
+          <GateDecisionPanel decisions={scopeGateDecisionsToQuestion(state.gateDecisions, questionId)} />
+        )}
+      </div>
     </div>
   );
 }
@@ -271,17 +295,29 @@ function DrillDownPanel({ drill, state, onClose }: DrillDownPanelProps) {
 interface Props {
   state: ResearchUIState;
   done?: boolean;
+  /** Extra content rendered in the header row, alongside cost/elapsed — e.g. replay's play/scrub bar. */
+  headerExtra?: React.ReactNode;
+  /** Content rendered above the header — e.g. replay's past-runs picker. */
+  topBar?: React.ReactNode;
+  /**
+   * Fullscreen "mission control" takeover (fixed inset-0) vs. a normal-flow embedded block.
+   * Default true — the live run (page.tsx) and /replay want the viewport-pinned dashboard. Set
+   * false when embedding the board inside other page content (e.g. ResearchReportView's
+   * "Exploration trace" recap) — fixed positioning there would cover the report it's nested in.
+   */
+  fullscreen?: boolean;
 }
 
-/** The question-centric swimlane board — replaces `ResearchProgress` (question-board-spec.md). */
-export function QuestionBoard({ state, done = false }: Props) {
+/**
+ * The question-centric swimlane board (question-board-spec.md) — a fullscreen "mission control"
+ * takeover while a run is live or being replayed: the pipeline state machine and the live activity
+ * ticker anchor a fixed top band, the swimlane rows scroll in a bounded middle region, and a
+ * question's drill-down slides up as an overlay sheet instead of pushing page height — the whole
+ * picture always fits the viewport, no matter how many questions or how deep a drill-down gets.
+ */
+export function QuestionBoard({ state, done = false, headerExtra, topBar, fullscreen = true }: Props) {
   const elapsed = useElapsed(state.running, state.topic);
   const [drill, setDrill] = useState<DrillDown | null>(null);
-  const traceRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (traceRef.current) traceRef.current.scrollTop = traceRef.current.scrollHeight;
-  }, [state.trace.length]);
 
   const lastGate = state.gateDecisions[state.gateDecisions.length - 1];
   const continueLoop = lastGate?.continueLoop ?? false;
@@ -290,19 +326,26 @@ export function QuestionBoard({ state, done = false }: Props) {
     setDrill((prev) => (prev && prev.questionId === questionId && prev.stage === stage ? null : { questionId, stage }));
   };
 
+  const rootClass = fullscreen
+    ? "fixed inset-0 z-20 flex flex-col gap-3 overflow-hidden bg-ink p-3 sm:p-4"
+    : "relative flex h-[70vh] flex-col gap-3 overflow-hidden rounded-lg border border-line bg-ink p-3";
+
   return (
-    <div className="relative mx-auto w-full max-w-6xl space-y-4">
+    <div className={rootClass}>
       {!done && state.running && (
         <div className="pointer-events-none absolute inset-0 z-10 animate-sweep bg-gradient-to-b from-accent/5 via-accent/10 to-transparent" />
       )}
 
+      {topBar}
+
       {/* Header */}
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <div className="eyebrow">Deep Research</div>
-          <h2 className="text-lg font-semibold text-fg">{state.topic}</h2>
+          <h2 className="truncate text-lg font-semibold text-fg">{state.topic}</h2>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {headerExtra}
           <CostCounter usage={state.usage} />
           <span className="nums text-sm text-mute">
             {fmtMs(elapsed)}
@@ -311,19 +354,23 @@ export function QuestionBoard({ state, done = false }: Props) {
         </div>
       </div>
 
-      <PipelineMinimap
-        activeNode={state.activeNode}
-        completedNodes={state.completedNodes}
-        loopIteration={state.loopIteration}
-        continueLoop={continueLoop}
-      />
+      {/* Pipeline state machine + live ticker — the "what's happening" band */}
+      <div className="grid h-24 shrink-0 grid-cols-1 gap-3 sm:h-28 lg:grid-cols-[2fr_1fr]">
+        <PipelineGraph
+          activeNode={state.activeNode}
+          completedNodes={state.completedNodes}
+          loopIteration={state.loopIteration}
+          continueLoop={continueLoop}
+        />
+        <ActivityTicker trace={state.trace} running={state.running} />
+      </div>
 
-      {/* Swimlanes */}
+      {/* Swimlanes — the only region that scrolls; everything else stays pinned in view */}
       {state.questions.length > 0 && (
-        <div className="space-y-2 overflow-x-auto">
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
           <div
-            className="grid gap-2 font-mono text-[10px] uppercase text-mute"
-            style={{ gridTemplateColumns: "minmax(180px,1fr) repeat(5, minmax(120px,1fr))" }}
+            className="grid shrink-0 gap-2 font-mono text-[10px] uppercase text-mute"
+            style={{ gridTemplateColumns: COLUMNS }}
           >
             <div />
             <div>Recon</div>
@@ -333,37 +380,28 @@ export function QuestionBoard({ state, done = false }: Props) {
             <div>Loop</div>
           </div>
 
-          {state.questions.map((q) => (
-            <QuestionRow key={q.question.id} q={q} state={state} drill={drill} onToggle={toggle} />
-          ))}
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            {state.questions.map((q) => (
+              <QuestionRow key={q.question.id} q={q} state={state} drill={drill} onToggle={toggle} />
+            ))}
+
+            {state.error && (
+              <div className="panel border-danger bg-danger/10 p-4">
+                <div className="eyebrow text-danger">Error</div>
+                <p className="mt-1 text-sm text-fg">{state.error}</p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {drill && <DrillDownPanel drill={drill} state={state} onClose={() => setDrill(null)} />}
-
-      {/* Activity feed */}
-      <div className="space-y-1">
-        <div className="eyebrow">Activity</div>
-        <div ref={traceRef} className="panel max-h-48 overflow-y-auto p-3 font-mono text-xs leading-relaxed">
-          {state.trace.map((line, i) => (
-            <div key={i} className="text-mute">
-              <span className="text-accent">$</span> {line.replace(/^\$ /, "")}
-            </div>
-          ))}
-          {state.running && state.activeNode && (
-            <div className="text-mute animate-blink">
-              <span className="text-accent">$</span> {state.activeNode}...
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Error */}
-      {state.error && (
-        <div className="panel border-danger bg-danger/10 p-4">
-          <div className="eyebrow text-danger">Error</div>
-          <p className="mt-1 text-sm text-fg">{state.error}</p>
-        </div>
+      {drill && (
+        <DrillDownPanel
+          drill={drill}
+          state={state}
+          onClose={() => setDrill(null)}
+          onSelectQuestion={(qid) => setDrill({ questionId: qid, stage: "deliberation" })}
+        />
       )}
     </div>
   );

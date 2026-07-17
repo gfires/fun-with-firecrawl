@@ -37,11 +37,14 @@ const config: Config = {
           "0%": { transform: "translateY(6px)", opacity: "0" },
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
+        // Marching-ants dash offset — reads as "data flowing" along an active pipeline edge.
+        "dash-flow": { to: { strokeDashoffset: "-20" } },
       },
       animation: {
         sweep: "sweep 2.2s ease-in-out infinite",
         blink: "blink 1s step-end infinite",
         rise: "rise 0.35s ease-out both",
+        "dash-flow": "dash-flow 0.5s linear infinite",
       },
     },
   },
