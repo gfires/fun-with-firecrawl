@@ -485,6 +485,10 @@ export function reduce(state: ResearchUIState, ev: ResearchEvent): ResearchUISta
         completedNodes: [...state.completedNodes, "recommend"],
         report: ev.report,
         running: false,
+        // The run is over — nothing is still "debating"/"retrieving"/"looping" regardless of
+        // which loop a question's committee was mid-flight in when the run stopped (e.g. a cost
+        // cap ending the loop early). Otherwise that question's badge blinks "debating" forever.
+        questions: state.questions.map((q) => (q.status === "resolved" ? q : { ...q, status: "resolved" as const })),
         trace: [...state.trace, "$ research complete"],
       };
 
@@ -506,11 +510,16 @@ export function reduce(state: ResearchUIState, ev: ResearchEvent): ResearchUISta
   }
 }
 
+/** Pure POST-body builder for start() — factored out so it's unit-testable without a DOM/fetch harness. */
+export function buildResearchRequestBody(topic: string, budget?: number, usdBudget?: number) {
+  return { topic, budget, usdBudget };
+}
+
 export function useResearchStream() {
   const [state, setState] = useState<ResearchUIState>(initialResearchState);
   const controllerRef = useRef<AbortController | null>(null);
 
-  const start = useCallback((topic: string, budget?: number) => {
+  const start = useCallback((topic: string, budget?: number, usdBudget?: number) => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -527,7 +536,7 @@ export function useResearchStream() {
         const res = await fetch("/api/research/orchestrated", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic, budget }),
+          body: JSON.stringify(buildResearchRequestBody(topic, budget, usdBudget)),
           signal: controller.signal,
         });
 
@@ -559,6 +568,16 @@ export function useResearchStream() {
             }
           }
         }
+
+        // The stream ended (reader.read() returned done) without ever delivering a terminal
+        // event (recommend:done / research:error) — e.g. the connection dropped mid-run. Without
+        // this, `running` stays true forever: the UI just sits on whatever phase it last saw
+        // (e.g. "synthesizing final report...") with no way out but a manual reset.
+        setState(s =>
+          s.running
+            ? { ...s, running: false, phase: "done", error: "connection closed before the run finished" }
+            : s,
+        );
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setState(s => ({

@@ -161,7 +161,7 @@ export function ResearchReportView({ report, scan, onReset }: Props) {
           Exploration trace
         </summary>
         <div className="px-4 pb-4">
-          <QuestionBoard state={scan} done />
+          <QuestionBoard state={scan} done fullscreen={false} />
         </div>
       </details>
 

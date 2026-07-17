@@ -22,6 +22,7 @@ import type { ResearchEvent, GateScore } from "../research-events";
 import { TOTAL_RETRIEVAL_BUDGET, MAX_LOOP_ITERATIONS } from "../params";
 import { startTrace } from "./trace";
 import { runWithCostTracker, getActiveCostTracker, BudgetExceededError } from "./cost-tracker";
+import { saveRun } from "../runs";
 
 /**
  * One question's debate transcript → the board's `debate:opening`/`debate:round` SSE events
@@ -59,7 +60,7 @@ export function runGraphStreaming(
   // Per-run cost tracker via AsyncLocalStorage — see runWithCostTracker. Isolates
   // this run's spend from any other concurrent run in the same process.
   return runWithCostTracker(
-    () => runGraphStreamingInner(topic, send, budgetOverride, retrievalMode),
+    () => runGraphStreamingInner(topic, send, budgetOverride, retrievalMode, usdBudgetOverride),
     usdBudgetOverride,
   );
 }
@@ -69,15 +70,22 @@ async function runGraphStreamingInner(
   send: (event: ResearchEvent) => void,
   budgetOverride?: number,
   retrievalMode: RetrievalMode = "agentic",
+  usdBudgetOverride?: number,
 ): Promise<ArmResult> {
   const trace = startTrace();
   const graph = compileResearchGraph();
   const threadId = `run-${Date.now()}`;
   const t0 = Date.now();
+  const startedAt = new Date(t0).toISOString();
 
+  // Not slimmed here — saveRun() (src/lib/runs.ts) is the single write boundary that applies
+  // slimReplayEvent, so callers of allEvents besides saveRun (none currently, but kept general)
+  // see the full events.
+  const allEvents: ResearchEvent[] = [];
   const originalSend = send;
   send = (event: ResearchEvent) => {
     trace.logEvent(event);
+    allEvents.push(event);
     originalSend(event);
   };
 
@@ -354,6 +362,18 @@ async function runGraphStreamingInner(
       trace.log("run_failed", { message, stack });
       console.error("[research] orchestrated streaming run failed:", err);
       await writeTrace();
+      // The caller (the SSE route) emits its own research:error frame after this promise
+      // rejects, but that frame never reaches allEvents (it's sent outside this function) —
+      // append one here so a replayed errored run visibly ends in an error, not a silent cutoff.
+      allEvents.push({ type: "research:error", message });
+      await saveRun({
+        topic,
+        status: "errored",
+        startedAt,
+        budget: budgetOverride,
+        usdBudget: usdBudgetOverride,
+        events: allEvents,
+      });
       throw err;
     }
   }
@@ -413,6 +433,18 @@ async function runGraphStreamingInner(
   };
 
   await writeTrace();
+
+  await saveRun({
+    topic,
+    status: "completed",
+    startedAt,
+    budget: budgetOverride,
+    usdBudget: usdBudgetOverride,
+    totalCostUsd: tokens.totalCostUsd,
+    firecrawlCredits: totalFirecrawlCredits,
+    events: allEvents,
+    mechanics,
+  });
 
   return result;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useScanStream } from "@/lib/useScanStream";
 import { useResearchStream } from "@/lib/useResearchStream";
 import { ScanInput, type RunMode } from "@/components/ScanInput";
@@ -18,10 +19,10 @@ export default function Home() {
 
   const isIdle = scan.state.phase === "idle" && research.state.phase === "idle";
 
-  const handleRun = (topic: string) => {
+  const handleRun = (topic: string, budget?: number, usdBudget?: number) => {
     if (mode === "research") {
       scan.reset();
-      research.start(topic);
+      research.start(topic, budget, usdBudget);
     } else {
       research.reset();
       scan.start(topic);
@@ -51,6 +52,12 @@ export default function Home() {
         <div className="flex min-h-[70vh] flex-col items-center justify-center">
           <ScanInput onRun={handleRun} disabled={scan.state.running || research.state.running} mode={mode} onModeChange={setMode} />
           <Leaderboard />
+          <Link
+            href="/replay"
+            className="mt-4 font-mono text-xs text-mute transition hover:text-accent"
+          >
+            past runs →
+          </Link>
         </div>
       )}
 

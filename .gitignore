@@ -27,3 +27,4 @@ trace-output/
 .ittybitty/agents/
 .ittybitty/archive/
 compare-output/
+.gstack/
