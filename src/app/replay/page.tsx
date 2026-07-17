@@ -65,36 +65,41 @@ export default function ReplayPage() {
 
   const replay = useResearchReplay(events ?? EMPTY_EVENTS);
 
+  // A single fixed-height row regardless of how many runs exist — horizontally scrollable, never
+  // wrapping to more lines. Without this, a long saved-run list ate the vertical space the board's
+  // swimlane region needs to actually scroll (topBar grows -> swimlane's flex-1 remainder shrinks).
   const picker = (
-    <div className="flex shrink-0 flex-wrap gap-2 font-mono text-xs">
-      <span className="eyebrow self-center pr-1">past runs</span>
-      <button
-        onClick={() => setSelectedId(DEMO_RUN_ID)}
-        className={`rounded border px-3 py-1 transition ${
-          selectedId === DEMO_RUN_ID
-            ? "border-accent text-accent"
-            : "border-line text-fg hover:border-accent hover:text-accent"
-        }`}
-      >
-        Demo run
-      </button>
-      {runs.map((run) => (
+    <div className="flex shrink-0 items-center gap-2 font-mono text-xs">
+      <span className="eyebrow shrink-0">past runs</span>
+      <div className="flex flex-1 gap-2 overflow-x-auto pb-1">
         <button
-          key={run.id}
-          onClick={() => setSelectedId(run.id)}
-          className={`flex items-center gap-2 rounded border px-3 py-1 transition ${
-            selectedId === run.id
+          onClick={() => setSelectedId(DEMO_RUN_ID)}
+          className={`shrink-0 rounded border px-3 py-1 transition ${
+            selectedId === DEMO_RUN_ID
               ? "border-accent text-accent"
               : "border-line text-fg hover:border-accent hover:text-accent"
           }`}
-          title={run.topic}
         >
-          <span className="max-w-[16ch] truncate">{run.topic}</span>
-          <span className="text-mute">{relativeTime(run.startedAt)}</span>
-          <span className="text-mute">{formatCost(run.totalCostUsd)}</span>
-          {run.status === "errored" && <span className="rounded bg-danger/20 px-1 text-danger">errored</span>}
+          Demo run
         </button>
-      ))}
+        {runs.map((run) => (
+          <button
+            key={run.id}
+            onClick={() => setSelectedId(run.id)}
+            className={`flex shrink-0 items-center gap-2 rounded border px-3 py-1 transition ${
+              selectedId === run.id
+                ? "border-accent text-accent"
+                : "border-line text-fg hover:border-accent hover:text-accent"
+            }`}
+            title={run.topic}
+          >
+            <span className="max-w-[16ch] truncate">{run.topic}</span>
+            <span className="text-mute">{relativeTime(run.startedAt)}</span>
+            <span className="text-mute">{formatCost(run.totalCostUsd)}</span>
+            {run.status === "errored" && <span className="rounded bg-danger/20 px-1 text-danger">errored</span>}
+          </button>
+        ))}
+      </div>
     </div>
   );
 
@@ -149,5 +154,13 @@ export default function ReplayPage() {
     );
   }
 
-  return <QuestionBoard state={replay.state} done={!replay.state.running} topBar={picker} headerExtra={playbackControls} />;
+  return (
+    <QuestionBoard
+      state={replay.state}
+      done={!replay.state.running}
+      topBar={picker}
+      headerExtra={playbackControls}
+      live={false}
+    />
+  );
 }

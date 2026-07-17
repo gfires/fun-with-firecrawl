@@ -56,7 +56,13 @@ interface DrillDown {
   stage: Stage;
 }
 
-function useElapsed(running: boolean, resetKey: string): number {
+// `live` gates the ticking interval — replay's `state.running` mirrors whatever the replayed
+// reducer computed (true until recommend:done/research:error is reached), which has nothing to do
+// with wall-clock time. Without this guard, scrubbing/playing a replay ran a REAL setInterval
+// counting up in actual elapsed seconds since the component mounted — meaningless during replay,
+// and disconnected from playback position or the original run's real duration (events carry no
+// timestamps to reconstruct that from). Replay's own scrub bar already shows position.
+function useElapsed(running: boolean, resetKey: string, live: boolean): number {
   const [elapsed, setElapsed] = useState(0);
   const t0 = useRef(Date.now());
 
@@ -66,10 +72,10 @@ function useElapsed(running: boolean, resetKey: string): number {
   }, [resetKey]);
 
   useEffect(() => {
-    if (!running) return;
+    if (!running || !live) return;
     const id = setInterval(() => setElapsed(Date.now() - t0.current), 100);
     return () => clearInterval(id);
-  }, [running]);
+  }, [running, live]);
 
   return elapsed;
 }
@@ -306,6 +312,11 @@ interface Props {
    * "Exploration trace" recap) — fixed positioning there would cover the report it's nested in.
    */
   fullscreen?: boolean;
+  /**
+   * Whether this is a real-time run (drives the wall-clock elapsed timer) vs. a replay (position
+   * is whatever the scrub bar says, not real elapsed seconds). Default true; /replay passes false.
+   */
+  live?: boolean;
 }
 
 /**
@@ -315,9 +326,10 @@ interface Props {
  * question's drill-down slides up as an overlay sheet instead of pushing page height — the whole
  * picture always fits the viewport, no matter how many questions or how deep a drill-down gets.
  */
-export function QuestionBoard({ state, done = false, headerExtra, topBar, fullscreen = true }: Props) {
-  const elapsed = useElapsed(state.running, state.topic);
+export function QuestionBoard({ state, done = false, headerExtra, topBar, fullscreen = true, live = true }: Props) {
+  const elapsed = useElapsed(state.running, state.topic, live);
   const [drill, setDrill] = useState<DrillDown | null>(null);
+  const [topicExpanded, setTopicExpanded] = useState(false);
 
   const lastGate = state.gateDecisions[state.gateDecisions.length - 1];
   const continueLoop = lastGate?.continueLoop ?? false;
@@ -339,18 +351,26 @@ export function QuestionBoard({ state, done = false, headerExtra, topBar, fullsc
       {topBar}
 
       {/* Header */}
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className="min-w-0">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 shrink">
           <div className="eyebrow">Deep Research</div>
-          <h2 className="truncate text-lg font-semibold text-fg">{state.topic}</h2>
+          <button
+            onClick={() => setTopicExpanded(true)}
+            className="line-clamp-2 text-left text-sm font-semibold leading-snug text-fg transition hover:text-accent"
+            title="click for full topic"
+          >
+            {state.topic}
+          </button>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
           {headerExtra}
           <CostCounter usage={state.usage} />
-          <span className="nums text-sm text-mute">
-            {fmtMs(elapsed)}
-            {state.running && <span className="animate-blink">█</span>}
-          </span>
+          {live && (
+            <span className="nums text-sm text-mute">
+              {fmtMs(elapsed)}
+              {state.running && <span className="animate-blink">█</span>}
+            </span>
+          )}
         </div>
       </div>
 
@@ -402,6 +422,27 @@ export function QuestionBoard({ state, done = false, headerExtra, topBar, fullsc
           onClose={() => setDrill(null)}
           onSelectQuestion={(qid) => setDrill({ questionId: qid, stage: "deliberation" })}
         />
+      )}
+
+      {topicExpanded && (
+        <div
+          className="fixed inset-0 z-30 flex items-end justify-center bg-ink/70 backdrop-blur-sm"
+          onClick={() => setTopicExpanded(false)}
+        >
+          <div
+            className="max-h-[70vh] w-full max-w-6xl animate-rise overflow-y-auto rounded-t-xl border border-line
+                       border-b-0 bg-panel p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="eyebrow">topic</div>
+              <button onClick={() => setTopicExpanded(false)} className="text-xs text-mute hover:text-fg">
+                close ✕
+              </button>
+            </div>
+            <p className="text-base leading-relaxed text-fg">{state.topic}</p>
+          </div>
+        </div>
       )}
     </div>
   );
