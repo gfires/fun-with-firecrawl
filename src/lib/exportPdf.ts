@@ -193,8 +193,10 @@ export function exportReportPdf(report: ScanReport): void {
 
   // 05 — Opportunity Thesis
   y = sectionHeading(doc, y, "05", "Opportunity Thesis");
-  y = wrapAndPrint(doc, report.opportunityThesis, MARGIN, y, CONTENT_W, 9.5);
-  y += 4;
+  for (const para of report.opportunityThesis.split("\n\n")) {
+    y = wrapAndPrint(doc, para, MARGIN, y, CONTENT_W, 9.5);
+    y += 4;
+  }
 
   // 06 — Adjacent Markets
   y = sectionHeading(doc, y, "06", "Adjacent Markets");

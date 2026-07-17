@@ -63,7 +63,7 @@ export const ScoresSchema = z.object({
 });
 export type Scores = z.infer<typeof ScoresSchema>;
 
-/** A named software vendor detected in the ecosystem. */
+/** A named software vendor detected in the ecosystem — strengths, weaknesses, and pricing. */
 export const VendorSchema = z.object({
   name: z.string(),
   note: z.string(),
@@ -87,7 +87,7 @@ export const ScanReportSchema = z.object({
   }),
   bottlenecks: z.array(EvidenceSchema).default([]),
   underservedNiches: z.array(EvidenceSchema).default([]),
-  /** A dense, evidence-packed paragraph laying out the actionable opportunity thesis. */
+  /** Two dense, evidence-packed paragraphs (product + timing/moat) laying out the actionable opportunity thesis. */
   opportunityThesis: z.string(),
   adjacentMarkets: z.array(EvidenceSchema).default([]),
   /** Clear, unambiguous next steps a founder should take. */

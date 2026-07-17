@@ -79,7 +79,11 @@ export function ReportView({
       </ReportSection>
 
       <ReportSection index="05" title="Opportunity Thesis">
-        <p className="text-sm leading-relaxed text-fg/90">{report.opportunityThesis}</p>
+        <div className="space-y-3">
+          {report.opportunityThesis.split("\n\n").map((p, i) => (
+            <p key={i} className="text-sm leading-relaxed text-fg/90">{p}</p>
+          ))}
+        </div>
       </ReportSection>
 
       <ReportSection index="06" title="Adjacent Markets">

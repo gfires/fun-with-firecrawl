@@ -47,7 +47,9 @@ export const QUOTA_FLOOR           = 2;
 
 // -- Baseline arm: scrape -------------------------------------------------------
 
-export const MAX_CHARS_PER_PAGE    = 4500;
+// 4000 (down from 4500) — origin/main's "tokens in check" tuning, keeping per-page content
+// within a tighter token budget downstream.
+export const MAX_CHARS_PER_PAGE    = 4000;
 export const SCRAPE_TIMEOUT_MS     = 20_000;
 export const SCRAPE_CONCURRENCY    = 6;
 

@@ -265,10 +265,18 @@ async function scrapeOne(
   const t0 = now();
   try {
     // Timeout lives INSIDE the limiter task so it clocks the actual scrape, not time spent
-    // waiting in the shared Firecrawl queue behind other requests.
+    // waiting in the shared Firecrawl queue behind other requests. onlyMainContent:false +
+    // waitFor/timeout (origin/main "wait for js") let JS-rendered pages finish rendering before
+    // Firecrawl scrapes them, instead of capturing an empty/incomplete shell.
     const res = await firecrawlLimiter(() =>
       withTimeout(
-        app.scrapeUrl(src.url, { formats: ["markdown"], onlyMainContent: true, parsePDF: false }),
+        app.scrapeUrl(src.url, {
+          formats: ["markdown"],
+          onlyMainContent: false,
+          parsePDF: false,
+          waitFor: 2000,
+          timeout: 15000,
+        }),
         SCRAPE_TIMEOUT_MS,
       ),
     );

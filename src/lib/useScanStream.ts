@@ -307,6 +307,13 @@ export function useScanStream() {
           setState((prev) => reduce(prev, ev));
         }
       }
+
+      // Stream closed — if we never got a report or error event, the server died mid-scan.
+      setState((prev) =>
+        prev.running
+          ? { ...prev, running: false, phase: "done", error: "Scan interrupted — the server closed the connection before finishing. Try again." }
+          : prev,
+      );
     } catch (err) {
       if (ctrl.signal.aborted) return; // user reset — ignore
       const message = err instanceof Error ? err.message : "Scan failed.";

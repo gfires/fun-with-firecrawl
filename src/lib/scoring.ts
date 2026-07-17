@@ -21,11 +21,11 @@ import type { Scores } from "./schema";
  * `softwareMaturity` is INVERTED before weighting — mature software means LESS opportunity.
  */
 export const OPPORTUNITY_WEIGHTS = {
-  pain: 0.25,
-  softwareGap: 0.2, // = (10 - softwareMaturity)
-  founderAccessibility: 0.2,
-  aiSuitability: 0.2,
-  budgetSignal: 0.15,
+  pain: 0.30,
+  softwareGap: 0.10, // = (10 - softwareMaturity)
+  founderAccessibility: 0.10,
+  aiSuitability: 0.30,
+  budgetSignal: 0.20,
 } as const;
 
 /**

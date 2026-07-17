@@ -22,7 +22,7 @@ import type { ScanEvent } from "@/lib/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120; // seconds — headroom over the 30–60s target
+export const maxDuration = 300; // seconds — niche topics can take 2–3min (search + scrape + analyze)
 
 export async function POST(req: Request) {
   const { industry: rawIndustry } = (await req.json().catch(() => ({}))) as { industry?: string };

@@ -19,11 +19,11 @@ import { ANALYSIS_MODEL } from "./params";
 
 /** Human + model-facing definitions of each 0–10 dimension. Keep in sync with schema.Scores. */
 export const SCORE_DEFINITIONS: { key: string; name: string; definition: string }[] = [
-  { key: "pain", name: "Pain Score", definition: "How much frustration, friction, and unmet need exists. USE THE FULL 0-10 RANGE — do not cluster around 5-7. Anchors: 1-2 = minor annoyances, people cope fine. 4-5 = real friction but livable, one painful step that wastes ~20 min. 7-8 = widespread complaints, hours of wasted work, people actively seeking alternatives. 9-10 = industry-wide crisis, people quitting over it, lawsuits, systemic failures." },
-  { key: "softwareMaturity", name: "Existing Solution Maturity", definition: "How modern and complete the existing solutions are — software, hardware, services, or any combination. USE THE FULL 0-10 RANGE. Anchors: 1-2 = paper, fax, spreadsheets, no commercial product exists. 4-5 = a few legacy tools or ad-hoc solutions exist but outdated, fragmented, or poorly adopted. 7-8 = solid options exist and most practitioners use them. 9-10 = mature, competitive market with multiple well-funded vendors." },
-  { key: "founderAccessibility", name: "Founder Accessibility", definition: "How easy is it for an outsider founder to break into this space? USE THE FULL 0-10 RANGE. Anchors: 1-2 = requires specific licenses, decades of relationships, or regulatory capture (e.g. defense contracting, pharmaceuticals). 4-5 = domain expertise needed but acquirable in months, some regulatory hurdles. 7-8 = open market, customers reachable online, no special credentials needed. 9-10 = can build and sell with no industry connections." },
-  { key: "aiSuitability", name: "AI Suitability", definition: "How well current manual work maps to what AI can automate or augment today. USE THE FULL 0-10 RANGE. Anchors: 1-2 = work is physical, relationship-driven, or requires real-time human judgment with no data trail. 4-5 = some document/data processing but heavily context-dependent. 7-8 = clear document workflows, pattern matching, classification tasks with existing training data. 9-10 = rote data entry, form filling, extraction from structured documents." },
-  { key: "budgetSignal", name: "Budget Signal", definition: "Evidence that buyers have money and willingness to pay for solutions. USE THE FULL 0-10 RANGE. Anchors: 1-2 = buyers are cost-sensitive individuals or tiny orgs with no budget (e.g. freelance tutors). 4-5 = some willingness to pay but small deal sizes, price-sensitive market. 7-8 = established budgets, $10k+ annual contracts common, funded competitors exist. 9-10 = enterprise buyers, six-figure deals, dedicated procurement teams, large conferences." },
+  { key: "pain", name: "Pain Score", definition: "Frustration/unmet need a new entrant could address. CALIBRATE: 7+ requires evidence of BEHAVIORAL change (building workarounds, hiring extra staff, switching vendors) — not just complaints. 1-2=cope fine. 3-4=friction but accepted. 5-6=active pain, seeking alternatives. 7-8=quantified losses, people changing behavior. 9-10=crisis/lawsuits/exodus." },
+  { key: "softwareMaturity", name: "Existing Solution Maturity", definition: "How modern/complete existing solutions are. CALIBRATE: actually COUNT vendors and assess adoption — '4-5 = some tools but fragmented' is lazy. 1-2=paper/spreadsheets, no purpose-built tool. 3-4=1-2 niche tools, poorly funded. 5-6=several tools, actively maintained, significant gaps. 7-8=3+ funded vendors, most practitioners use them. 9-10=dominant players (Salesforce/Epic-level)." },
+  { key: "founderAccessibility", name: "Founder Accessibility", definition: "Can an outsider founder break in? Consider regulation, sales cycles, trust, data access, integration complexity. Ask: 'Could a 2-person team get 10 paying customers in 6 months?' 1-2=licenses, multi-year procurement. 3-4=deep domain expertise, 6+ month sales cycles. 5-6=learnable domain, moderate sales cycles. 7-8=open market, self-serve possible. 9-10=consumer-style, viral distribution." },
+  { key: "aiSuitability", name: "AI Suitability", definition: "How well the SPECIFIC BOTTLENECKS above map to what AI can automate TODAY. Score the identified pain points, not the industry generally. 1-2=physical/relationship work, no data trail. 3-4=hard part is non-digital. 5-6=data workflows but need domain fine-tuning. 7-8=clear NLP/vision/classification tasks with training data. 9-10=rote data entry, AI already outperforms humans." },
+  { key: "budgetSignal", name: "Budget Signal", definition: "Evidence buyers will pay for NEW solutions (legacy spend doesn't count). Look for: recent startup funding, new RFPs, expanding budgets. 1-2=price-sensitive individuals, no budget. 3-4=small biz, <$1K/yr spend. 5-6=mid-market, $5-50K contracts. 7-8=enterprise, $50K+ deals, funded competitors. 9-10=six-figure deals, dedicated procurement." },
 ];
 
 function config() {
@@ -110,112 +110,70 @@ Produce a JSON object with EXACTLY these fields:
   "industry": string,
   "scores": {
     "pain": { "value": 0-10, "label": short word, "reason": one sentence },
-    "softwareMaturity": {...}, "laborScarcity": {...}, "aiSuitability": {...}, "budgetSignal": {...}
+    "softwareMaturity": {...}, "founderAccessibility": {...}, "aiSuitability": {...}, "budgetSignal": {...}
   },
-  "snapshot": string,                 // 2-3 sentence "Industry Snapshot" — high-level lay of the land
+  "snapshot": string,                 // SEE SPECIAL INSTRUCTIONS BELOW
   "softwareEcosystem": {
-    "summary": string,                // 1-2 sentences on the status of current tooling
+    "summary": string,                // SEE SPECIAL INSTRUCTIONS BELOW
     "vendors": [{ "name", "note", "sourceIds" }]
   },
-  "bottlenecks": [{ "text", "sourceIds" }],          // Structural bottlenecks (NOT friction/complaints — root causes)
+  "bottlenecks": [{ "text", "sourceIds" }],          // SEE SPECIAL INSTRUCTIONS BELOW
   "underservedNiches": [{ "text", "sourceIds" }],    // Segments or workflows nobody is solving well
   "opportunityThesis": string,        // SEE SPECIAL INSTRUCTIONS BELOW
   "adjacentMarkets": [{ "text", "sourceIds" }],
   "nextSteps": [{ "text", "sourceIds" }]              // SEE SPECIAL INSTRUCTIONS BELOW
 }
 
+SCORING CALIBRATION:
+The goal is DIFFERENTIATION — a restaurant scan should score very differently from a biotech scan. \
+Before finalizing, ask: "Would these same scores fit a different industry?" If yes, you're lazy. \
+TRAPS: Pain 7 (complaints ≠ behavioral change — people building workarounds/switching = 7+, \
+"wish it was better" = 4-5). Software Maturity 5 ("some tools with gaps" = every market — COUNT \
+vendors, check funding). AI Suitability 7 (score the SPECIFIC bottlenecks, not the industry). \
+Budget 7 (legacy spend ≠ new-tool budget — look for ACTIVE buying signals). \
+Reference specific sources in each score's "reason" field.
+
 SECTION INSTRUCTIONS:
 
-- "bottlenecks": Structural root causes that create opportunity — regulatory, workflow, technical, \
-or labor bottlenecks. NOT surface-level friction or complaints (those are symptoms). 3-5 items. \
-CRITICAL: each bottleneck must describe the SPECIFIC WORKFLOW or process that breaks down. \
-BAD: "Regulatory compliance is a significant bottleneck." \
-GOOD: "Brokers must manually verify borrower income by cross-referencing W-2s, 1099s, and bank \
-statements against Fannie Mae's DU/LP automated underwriting output — a process that takes 2-4 \
-hours per file and still produces a 15% error rate according to [3]. No existing tool connects \
-the document OCR step to the AUS submission, so brokers re-key data between systems." \
-Name the specific documents, systems, job titles, regulations, or process steps involved. If the \
-source mentions a pain point generically, dig into the HOW — what exactly do people do today, \
-step by step, and where does it break?
+- "snapshot": 4-6 sentences. (1) Size the industry with a number from sources, (2) describe what \
+practitioners actually DO day-to-day, (3) name 1-2 macro forces reshaping the space now, \
+(4) state the core tension that creates opportunity. Cite sources with [id]s.
 
-- "underservedNiches": Segments or workflows nobody is solving well. 3-5 items. \
-CRITICAL: each niche must name a SPECIFIC population or workflow gap and explain WHY it's \
-underserved with concrete details. \
-BAD: "First-time homebuyers need more personalized guidance." \
-GOOD: "Self-employed borrowers with 1099 income are rejected by automated underwriting at 3x \
-the rate of W-2 earners [5] because DU/LP models weight income stability heavily — but manual \
-underwriters who specialize in non-QM products report approval rates above 70% [8]. No existing \
-platform routes these borrowers to the right underwriter or pre-qualifies them with alternative \
-documentation (12-month bank statement programs, asset depletion calculations)." \
-Name the population size if available, what they need, what exists today, and what's missing.
+- "softwareEcosystem": \
+  "summary": 2-3 sentences. State maturity bluntly (greenfield / fragmented / mature). Name the \
+  specific GAP across existing tools. \
+  "vendors": 4-6 vendors. Each "note" must cover strengths AND weaknesses in 2-3 sentences — \
+  what it does well, where it falls short, what users say, pricing if available.
 
-- "opportunityThesis": TWO DENSE PARAGRAPHS (separated by \\n\\n, not a list) that together form \
-a thesis a founder can immediately run with. \
-PARAGRAPH 1 — THE PRODUCT: (1) explicitly tie the bottlenecks above to a SPECIFIC product — \
-name the features, the data flows, the integrations, (2) explain the wedge: which single \
-workflow do you automate first and for whom, (3) name the specific user persona and their \
-current workaround. Cite sources throughout with [id]s. \
-PARAGRAPH 2 — THE TIMING AND MOAT: (1) explain why NOW is the moment (regulatory change, \
-technology inflection, market shift, new data availability — be specific with dates, bill \
-numbers, or technology milestones from the sources), (2) describe the compounding advantage — \
-what gets better with each customer (data flywheel, network effect, integration lock-in), \
-(3) size the initial wedge market if the sources support it (number of practitioners, \
-companies, or transaction volume). Cite sources throughout with [id]s. \
-BAD: "AI-driven solutions can address regulatory compliance and administrative burdens." \
-GOOD first paragraph: "A system that ingests borrower documents (W-2s, 1099s, bank statements) \
-via OCR, auto-populates the 1003 Uniform Residential Loan Application, and submits directly to \
-DU/LP would eliminate the 2-4 hour manual verification bottleneck that [3] identifies. The \
-wedge is the 1099/self-employed segment..." \
-GOOD second paragraph: "The timing is driven by CFPB's 2025 Section 1033 open banking rule, \
-which for the first time requires banks to share consumer financial data via API [7] — this \
-makes bank-statement-based income verification programmatic rather than manual. Each lender \
-onboarded adds to a training corpus of underwriting decisions that improves approval-rate \
-prediction across the 380,000 active loan officers [11]..." \
-Think: someone should be able to read these two paragraphs and start building a PRD.
+- "bottlenecks": Structural ROOT CAUSES, not surface friction. 4-6 items, each 3-4 sentences: \
+(1) the specific workflow/process that breaks, naming documents, systems, job titles, \
+(2) quantified impact — time/money/error from sources, (3) why existing tools don't solve it.
 
-- "adjacentMarkets": Neighboring industries or verticals with crossover potential. 3-5 items. \
-CRITICAL: each adjacent market must explain the SPECIFIC MECHANISM of crossover — what shared \
-workflow, regulation, data format, or customer relationship creates the bridge. \
-BAD: "Insurance is an adjacent market with synergies." \
-GOOD: "Title insurance underwriters already consume the same MISMO-format XML data packages that \
-mortgage originators produce [4], and 'title agents spend 6+ hours per file chasing payoff \
-statements from servicers' [11] — a document-ingestion system built for mortgage verification \
-could extend to title search automation with minimal re-engineering because the underlying \
-document types (deeds, liens, UCC filings) flow through the same county clerk APIs." \
-Name the specific data formats, vendor ecosystems, regulatory overlaps, or shared customer \
-segments that make the crossover realistic, not hypothetical.
+- "underservedNiches": 3-5 items. Each must name a SPECIFIC population or workflow gap and explain \
+WHY it's underserved — population size, what they need, what exists today, what's missing.
 
-- "nextSteps": Extremely clear, unambiguous, actionable instructions for what a founder should do \
-RIGHT NOW. Not vague advice — specific actions with enough detail that someone could execute \
-them this week. 4-6 items. \
-BAD: "Conduct customer discovery interviews with industry professionals." \
-GOOD: "Post on r/mortgagebrokers and the 'Loan Officer Freedom' Facebook group (12k members) \
-offering a $50 Amazon card for a 30-minute Zoom — ask them to screen-share their actual income \
-verification workflow in Encompass/Byte and note every manual re-keying step. Target 8-10 \
-interviews; you need to see the workflow, not just hear about it." \
-Each step should name specific communities, tools, conferences, datasets, regulatory filings, \
-or organizations from the sources. Reference what the sources revealed — the next steps should \
-be things a founder would ONLY know to do after reading this report.
+- "opportunityThesis": TWO LONG, DENSE PARAGRAPHS (separated by \\n\\n, not a list). Each 6-8 \
+sentences. Thread specific data points, quotes, numbers, product names from the sources into \
+every sentence. Vague generalities are a failure mode. \
+PARAGRAPH 1 — THE PRODUCT: tie bottlenecks to a specific product (features, data flows, \
+integrations), name the wedge workflow, the user persona, the current workaround, the technical \
+approach, and where incumbents fall short. 4+ citations. \
+PARAGRAPH 2 — THE TIMING AND MOAT: why NOW (specific dates/events from sources), compounding \
+advantage (data flywheel, network effect), wedge market size with numbers, expansion path. 4+ \
+citations. Someone should read these two paragraphs and start building a PRD.
 
-CRITICAL — every "text", "note", and the "opportunityThesis" string MUST include direct quotes \
-pulled verbatim from the sources in quotation marks, with the source [id] immediately after. Build \
-each item as a specific thesis supported by concrete details (names, numbers, exact phrases from \
-real people/companies), NOT a generic summary. The reader should encounter real voices and hard \
-data, not paraphrased abstractions.
+- "adjacentMarkets": 3-5 items. Each must explain the SPECIFIC MECHANISM of crossover — shared \
+data formats, vendor ecosystems, regulatory overlaps, or customer segments.
 
-SPECIFICITY TEST — apply this to EVERY item in bottlenecks, underservedNiches, adjacentMarkets, \
-nextSteps, and the opportunityThesis: "Could someone who did zero research have written this \
-from general knowledge alone?" If yes, it FAILS. Rewrite it with specific document names, system \
-names, process steps, job titles, regulations, dollar amounts, error rates, community names, \
-vendor names, or data formats that you found IN the sources. The entire value of this report is \
-that it surfaces operational details a founder wouldn't know without deep research. Generic \
-observations anyone could guess — "workflow automation," "regulatory compliance is complex," \
-"the market is growing" — are worthless. Every sentence should make the reader think "I didn't \
-know that."
+- "nextSteps": 4-6 items. Extremely specific actions executable THIS WEEK — name communities, \
+tools, conferences, datasets, or organizations from the sources.
 
-Minimize redundancy between sections. Bottlenecks describe the problems. Underserved niches \
-describe who's underserved. The opportunity thesis synthesizes both into what to build and why. \
-Next steps say exactly how to start. Each section should add new information, not repeat.
+CROSS-CUTTING RULES:
+- Every "text", "note", and "opportunityThesis" MUST include direct quotes from sources with [id].
+- SPECIFICITY TEST: "Could someone who did zero research write this?" If yes, REWRITE with \
+specific names, numbers, processes, and quotes from the sources.
+- Minimize redundancy: bottlenecks=problems, niches=who's underserved, thesis=what to build, \
+next steps=how to start.
 
 Aim for 3-6 items in each list. Every item's sourceIds MUST reference the sources below.
 
