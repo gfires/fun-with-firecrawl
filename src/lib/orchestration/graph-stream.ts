@@ -197,6 +197,19 @@ async function runGraphStreamingInner(
         trace.logStateSnapshot(nodeName, output);
 
         switch (nodeName) {
+          case "intake": {
+            // Same gap as retrieve's researcher calls (fixed above): intake (graph.ts) returns
+            // output.llmCalls same as every other node, but had no case here at all, so its real,
+            // billed LLM call (topic -> ResearchBrief) never reached research:usage. Small in
+            // dollars (~$0.001, one Haiku call) but the same structural bug — confirmed against a
+            // real run's trace: intake's actual usage recomputes to within $0.000001 of that run's
+            // entire streamed-vs-authoritative-total gap.
+            const usages = (output.llmCalls ?? []) as AnnotatedUsage[];
+            allLlmCalls.push(...usages);
+            for (const u of usages) send({ type: "research:usage", usage: u });
+            break;
+          }
+
           case "decompose": {
             const questions = (output.questions ?? []) as Question[];
             currentQuestions = questions;
