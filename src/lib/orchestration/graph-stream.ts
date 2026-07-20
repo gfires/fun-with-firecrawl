@@ -430,8 +430,6 @@ async function runGraphStreamingInner(
     mechanics,
   };
 
-  await writeTrace();
-
   // recommend:done/research:mechanics are built and folded into allEvents/trace here, but NOT sent
   // to the live client yet — saveRun() below persists them (and everything before them) first. The
   // UI auto-opens the report popup the instant recommend:done reaches it, so the run must already
@@ -456,6 +454,12 @@ async function runGraphStreamingInner(
 
   originalSend(recommendDoneEvent);
   originalSend(mechanicsEvent);
+
+  // Written LAST, after every trace.logEvent call above — writing earlier (as a prior version of
+  // this function did) silently dropped recommend:done/research:mechanics from the persisted
+  // trace-output/*.trace.json file (the live client and Supabase's research_runs.events were still
+  // correct, since those read from `allEvents`/`originalSend` directly, not from disk).
+  await writeTrace();
 
   return result;
 }

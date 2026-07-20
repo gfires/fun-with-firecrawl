@@ -169,9 +169,13 @@ function QuestionRow({ q, state, drill, onToggle }: RowProps) {
         </div>
       </div>
 
-      {/* Recon */}
+      {/* Recon — "recon" is loop-0's initial reconnaissance pass specifically (reconCount filters
+          evidence.loopIteration === 0); "total" is everything gathered since, including later
+          targeted retrieval loops. Labeled explicitly (not "src"/"total") because once a second
+          loop adds evidence the two numbers diverge, and an unexplained pair reads as two
+          inconsistent measures of the same thing rather than two different things. */}
       <Cell active={isDrilled("recon")} onClick={() => onToggle(qid, "recon")}>
-        <div className="nums text-fg">{reconCount(evidence)} src</div>
+        <div className="nums text-fg">{reconCount(evidence)} recon</div>
         <div className="text-mute">{evidence.length} total</div>
       </Cell>
 
@@ -195,9 +199,20 @@ function QuestionRow({ q, state, drill, onToggle }: RowProps) {
 
       {/* Loop */}
       <Cell active={isDrilled("loop")} onClick={() => onToggle(qid, "loop")}>
-        {q.status === "looping" || q.currentLoop > 0 ? (
+        {q.status === "looping" ? (
+          // Actively mid-loop right now — present tense, amber (matches the row's own
+          // "looping"/"retrieving" status styling).
           <>
             <span className="text-amber">↻ retrieve loop {q.currentLoop}</span>
+            <WindowShopStrip passes={state.researcherByQuestion[qid] ?? []} variant="cell" />
+          </>
+        ) : q.currentLoop > 0 ? (
+          // The run has since ended (status normalizes to "resolved" on recommend:done) but this
+          // question DID go through extra retrieval — currentLoop never resets, so say so in the
+          // past tense instead of reusing the active "retrieve loop N" wording, which reads as
+          // still-in-progress and contradicts a "converged"/finished run.
+          <>
+            <span className="text-mute">loop {q.currentLoop} · done</span>
             <WindowShopStrip passes={state.researcherByQuestion[qid] ?? []} variant="cell" />
           </>
         ) : (
