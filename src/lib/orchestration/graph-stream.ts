@@ -226,6 +226,17 @@ async function runGraphStreamingInner(
             // mirror state.budgetRemaining for the post-gate routing prediction.
             budgetRemaining += (output.budgetRemaining ?? 0) as number;
 
+            // The agentic arm's researcher agents are real, billed LLM calls (retrieveAgentic
+            // returns them as output.llmCalls, same shape as debate/gate/recommend) — forward them
+            // the same way those cases do. Without this the cost tracker's FINAL total (authoritative,
+            // used for research_runs.total_cost_usd) correctly included this spend while the live
+            // research:usage stream and the per-call breakdown table silently never did — on one real
+            // run, 33 researcher calls (~$0.16, 23% of total spend) were invisible everywhere except
+            // the grand total, which then looked unexplained against its own line items.
+            const retrieveUsages = (output.llmCalls ?? []) as AnnotatedUsage[];
+            allLlmCalls.push(...retrieveUsages);
+            for (const u of retrieveUsages) send({ type: "research:usage", usage: u });
+
             for (const ev of evidence) {
               // Prefer the real question id (agentic arm tags every Evidence with it — see
               // researcher.ts) over sourceQuery, mirroring scopeEvidenceToQuestions's own identity-
