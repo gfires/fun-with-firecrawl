@@ -27,6 +27,31 @@ describe("replay fixture", () => {
     expect(s.running).toBe(false);
   });
 
+  it("cost is coherent: Σ research:usage === authoritative mechanics total === reconciled header", () => {
+    // Tier C (single-source drain) + Core 1 (reducer reconciliation): the streamed per-call events
+    // must sum to the mechanics receipt's authoritative rollup, and the reduced header must equal it.
+    // This is the invariant whose violation was the original "$0.71 vs $0.5x" bug.
+    const usageSum = events
+      .filter((e) => e.type === "research:usage")
+      .reduce((a, e) => a + (e as { usage: { costUsd: number } }).usage.costUsd, 0);
+    const s = events.reduce(reduce, initialResearchState);
+    const mechTotal = s.mechanics?.convergence.totalCostUsd ?? -1;
+    expect(usageSum).toBeCloseTo(mechTotal, 4);
+    expect(s.usage.totalCostUsd).toBeCloseTo(mechTotal, 4);
+  });
+
+  it("a stopped run states WHY it stopped, and truncated questions don't masquerade as fault lines", () => {
+    // Core 2 (convergedReason) + Core 3 (truncated), inc. backfill from pre-field traces: a converged
+    // run's final gate must carry a reason, and any question flagged truncated must NOT read "settled".
+    const s = events.reduce(reduce, initialResearchState);
+    const lastGate = s.gateDecisions[s.gateDecisions.length - 1];
+    expect(lastGate.continueLoop).toBe(false);
+    expect(lastGate.convergedReason).toBeTruthy(); // e.g. "cost-headroom" — never a blank halt
+    for (const score of lastGate.gateScores) {
+      if (score.truncated) expect(score.retrieve).toBe(false); // truncated ⇒ resolved-without-retrieval
+    }
+  });
+
   it("carries the board's load-bearing signals: stance + researcher progress", () => {
     // Every streamed claim has a categorical stance (the openings/gate columns render it).
     const claimEvents = events.filter((e) => e.type === "debate:claim");

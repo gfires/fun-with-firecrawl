@@ -38,8 +38,14 @@ export function GateDecisionPanel({ decisions }: Props) {
                 <tr key={s.questionId} className={s.retrieve ? "text-fg" : "text-mute"}>
                   <td className="py-1 pr-2">{s.questionId}</td>
                   <td className="py-1 pr-2">
+                    {/* A truncated question was still RESOLVED (committee stance + report entry) — it
+                        just had a flagged gap the run stopped before chasing. Show it as a distinct
+                        answered-with-caveat state (amber), not the plain grey RESOLVED and not a red
+                        failure, so this drill-down matches the board's "answered · gap unchased". */}
                     {s.retrieve ? (
                       <span className="text-accent">RETRIEVE</span>
+                    ) : s.truncated ? (
+                      <span className="text-amber">RESOLVED*</span>
                     ) : (
                       <span className="text-mute">RESOLVED</span>
                     )}

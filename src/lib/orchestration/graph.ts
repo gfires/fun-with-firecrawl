@@ -607,7 +607,7 @@ async function debate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
  * edge can read it without re-running the policy.
  */
 async function gate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
-  const { state: next, continueLoop, usage, gateScores } = await allocateBudget(state);
+  const { state: next, continueLoop, usage, gateScores, convergedReason } = await allocateBudget(state);
   // NB: allocateBudget does not spend Firecrawl credits — it only resolves questions
   // and advances loopIteration. So gate returns NO budget delta; budgetRemaining/
   // budgetSpent are owned solely by `retrieve`. Returning them here would double-count
@@ -616,6 +616,7 @@ async function gate(state: ResearchStateT): Promise<Partial<ResearchStateT>> {
     questions: next.questions,
     loopIteration: next.loopIteration,
     converged: !continueLoop,
+    convergedReason,
     llmCalls: usage,
     gateScores,
   };

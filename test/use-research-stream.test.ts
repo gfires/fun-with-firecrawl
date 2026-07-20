@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { reduce, initialResearchState } from "@/lib/useResearchStream";
+import { reduce, initialResearchState, normalizeGateScore, deriveConvergedReason } from "@/lib/useResearchStream";
+import type { GateScore } from "@/lib/research-events";
 import type { Claim } from "@/lib/schemas/claim";
 import type { Question, ResearchStateT } from "@/lib/schemas/state";
 import { computeRunMechanics } from "@/lib/orchestration/mechanics";
@@ -170,6 +171,46 @@ describe("reduce — researcherByQuestion (board spec §3d)", () => {
   });
 });
 
+const gs = (over: Partial<GateScore>): GateScore => ({
+  questionId: "q1",
+  retrieve: false,
+  gapCount: 0,
+  confidenceSpread: 0,
+  reason: "",
+  ...over,
+});
+
+describe("normalizeGateScore / deriveConvergedReason (backfill for pre-field traces)", () => {
+  it("honors an explicit truncated flag (new runs) without touching it", () => {
+    expect(normalizeGateScore(gs({ truncated: true, reason: "anything" })).truncated).toBe(true);
+    expect(normalizeGateScore(gs({ truncated: false, reason: "would retrieve, but converged (x)" })).truncated).toBe(false);
+  });
+
+  it("derives truncated from a cost-headroom / clamp reason string (old fixtures)", () => {
+    expect(normalizeGateScore(gs({ reason: "evidential contention — would retrieve, but converged (cost-headroom)" })).truncated).toBe(true);
+    expect(normalizeGateScore(gs({ reason: "clamped — budget insufficient" })).truncated).toBe(true);
+  });
+
+  it("does NOT flag a genuine resolve (fault line / settled) as truncated", () => {
+    expect(normalizeGateScore(gs({ reason: "committee split with no surviving contention — reporting the fault line" })).truncated).toBe(false);
+    expect(normalizeGateScore(gs({ reason: "committee reached a unanimous supports — settled" })).truncated).toBe(false);
+  });
+
+  it("prefers the event's own convergedReason when present", () => {
+    expect(deriveConvergedReason({ convergedReason: "max-loops", continueLoop: false, gateScores: [] })).toBe("max-loops");
+  });
+
+  it("derives the reason from a score's 'converged (X)' string when the field is absent", () => {
+    expect(
+      deriveConvergedReason({ continueLoop: false, gateScores: [gs({ reason: "named evidence gap — would retrieve, but converged (cost-headroom)" })] }),
+    ).toBe("cost-headroom");
+  });
+
+  it("is null while the loop is still continuing", () => {
+    expect(deriveConvergedReason({ continueLoop: true, gateScores: [gs({ reason: "would retrieve, but converged (cost-headroom)" })] })).toBeNull();
+  });
+});
+
 describe("reduce — research:mechanics (board spec §6 Phase 5)", () => {
   it("sets state.mechanics from the terminal event, read-only from computeRunMechanics", () => {
     const mechanics = computeRunMechanics([], {} as ResearchStateT, rollupTokens([]));
@@ -179,5 +220,25 @@ describe("reduce — research:mechanics (board spec §6 Phase 5)", () => {
 
   it("starts null before any research:mechanics event", () => {
     expect(initialResearchState.mechanics).toBeNull();
+  });
+
+  it("reconciles the header cost to the authoritative mechanics total (fixes streamed-vs-total drift)", () => {
+    // The per-call stream can under-total (an old fixture missing usage events, a degraded run). The
+    // mechanics receipt carries the cost tracker's authoritative rollup — snapping to it makes the
+    // displayed final cost correct in live AND replay.
+    let s = initialResearchState;
+    s = reduce(s, {
+      type: "research:usage",
+      usage: { model: "m", promptTokens: 100, completionTokens: 20, label: "a", costUsd: 0.02 },
+    });
+    expect(s.usage.totalCostUsd).toBeCloseTo(0.02);
+
+    const mechanics = computeRunMechanics([], {} as ResearchStateT, rollupTokens([]));
+    mechanics.convergence.totalCostUsd = 0.075; // authoritative rollup > the streamed sum
+    s = reduce(s, { type: "research:mechanics", mechanics });
+
+    expect(s.usage.totalCostUsd).toBeCloseTo(0.075); // snapped to authoritative
+    expect(s.usage.totalPromptTokens).toBe(100); // token counts untouched
+    expect(s.usage.totalCompletionTokens).toBe(20);
   });
 });

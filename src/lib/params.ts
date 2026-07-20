@@ -165,10 +165,11 @@ export const MAX_AGENT_STEPS       = 8;
 // sharper, gap-informed query. Code-enforced in webSearch (the prompt is only a hint). Default 1.
 export const MAX_SEARCHES_PER_PASS = 1;
 // Loop-0 recon floor: minimum sources an agent must gather before it may finish on the first
-// (reconnaissance) pass. Mirrors the coded RECON_RESULTS_PER_QUESTION grounding floor — thin
-// evidence mis-calibrates round-0 claims. Code-enforced (re-drive the agent), never a deadlock:
-// the agent still stops on maxSteps / pool exhaustion / no-tool-call regardless (see §11).
-export const RECON_FLOOR           = 3;
+// (reconnaissance) pass. Mirrors the coded RECON_RESULTS_PER_QUESTION grounding floor (4) — thin
+// evidence mis-calibrates round-0 claims — so on loop 0 the floor equals the ceiling and the agent
+// gathers a full 4. Code-enforced (re-drive the agent), never a deadlock: the agent still stops on
+// maxSteps / pool exhaustion / no-tool-call regardless (see §11).
+export const RECON_FLOOR           = 4;
 // The working-memo head the agent sees per readSource result (title + first N chars). The FULL
 // page is still stored as Evidence for the committee — this only bounds the agent's context.
 export const READSOURCE_HEAD_CHARS = 600;

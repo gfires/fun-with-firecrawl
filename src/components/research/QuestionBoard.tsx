@@ -46,6 +46,21 @@ const GATE_VERDICT_STYLE: Record<GateVerdict, { label: string; cls: string }> = 
   "fault-line": { label: "⚡ fault line", cls: "text-amber" },
   limitation: { label: "⚠ limitation", cls: "text-mute" },
   retrieve: { label: "↻ retrieve +gap", cls: "text-amber" },
+  // Answered — but the run converged before chasing a gap this question had flagged. It WAS resolved
+  // (committee stance + report entry), just on the evidence in hand; the gap is noted, not fatal. So
+  // "answered · gap unchased", amber (a caveat), NOT danger (which read as a failed/cut-off question).
+  truncated: { label: "⌛ answered · gap unchased", cls: "text-amber" },
+};
+
+// Human phrasing for the gate's convergence reason (why the whole loop stopped) — shown once,
+// above the board, so a run that halted on budget/loops doesn't read as if every question settled.
+const CONVERGED_REASON_LABEL: Record<string, string> = {
+  "cost-headroom": "LLM cost cap — stopped before a loop it couldn't afford to finish",
+  budget: "retrieval budget exhausted",
+  "max-loops": "hit the max retrieval-loop limit",
+  "no-progress": "a retrieval loop added no new evidence",
+  "gate-decided-no-retrieve": "the gate judged more retrieval wouldn't help",
+  "zero-cost-resolved": "every question resolved without needing another loop",
 };
 
 const COLUMNS = "minmax(180px,1fr) repeat(5, minmax(120px,1fr))";
@@ -348,6 +363,14 @@ export function QuestionBoard({ state, done = false, headerExtra, topBar, fullsc
 
   const lastGate = state.gateDecisions[state.gateDecisions.length - 1];
   const continueLoop = lastGate?.continueLoop ?? false;
+  // Why the run stopped — shown once the loop has converged (not while still looping). Falls back to
+  // the raw reason code if it's one we haven't given friendly wording. Any question flagged
+  // `truncated` means the stop cut an investigation short (budget/loops), which we call out.
+  const stopReason = !continueLoop && lastGate?.convergedReason ? lastGate.convergedReason : null;
+  // Scan EVERY loop's scores, not just the last gate's: a question truncated in an earlier loop is
+  // resolved out of later gates, so `lastGate` alone would miss it and the banner would read "clean
+  // convergence" while that question's own cell (which scans all decisions) shows "truncated · gap".
+  const anyTruncated = state.gateDecisions.some((d) => d.gateScores.some((s) => s.truncated));
 
   const toggle = (questionId: string, stage: Stage) => {
     setDrill((prev) => (prev && prev.questionId === questionId && prev.stage === stage ? null : { questionId, stage }));
@@ -388,6 +411,28 @@ export function QuestionBoard({ state, done = false, headerExtra, topBar, fullsc
           )}
         </div>
       </div>
+
+      {/* Why the run stopped — one line, so a budget/loop truncation never masquerades as
+          "every question settled". Amber caveat when a question's gap went unchased, mute otherwise. */}
+      {stopReason && (
+        <div
+          className={`shrink-0 rounded border px-2.5 py-1.5 text-[11px] ${
+            anyTruncated ? "border-amber/40 bg-amber/5 text-amber" : "border-line bg-panel2 text-mute"
+          }`}
+        >
+          <span className="font-mono uppercase tracking-wide">
+            {anyTruncated ? "⌛ answered · gap unchased" : "✔ run converged"}
+          </span>
+          <span className="mx-1.5 text-line">·</span>
+          {CONVERGED_REASON_LABEL[stopReason] ?? stopReason}
+          {anyTruncated && (
+            <span className="text-mute">
+              {" "}— every question was still answered from the evidence gathered; some had a flagged
+              gap the run stopped before chasing
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Pipeline state machine + live ticker — the "what's happening" band */}
       <div className="grid h-24 shrink-0 grid-cols-1 gap-3 sm:h-28 lg:grid-cols-[2fr_1fr]">

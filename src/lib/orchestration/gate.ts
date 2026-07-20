@@ -158,7 +158,7 @@ function classifyQuestion(state: ResearchStateT, q: Question): QuestionSignal | 
 
 export async function allocateBudget(
   state: ResearchStateT
-): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; gateScores: GateScore[] }> {
+): Promise<{ state: ResearchStateT; continueLoop: boolean; usage: AnnotatedUsage[]; gateScores: GateScore[]; convergedReason: string | null }> {
   // Zero-cost convergence checks first — budget, loop cap, zero-progress loop — so a
   // converged run never pays for a gate classification call.
   const shortCircuit = gateShortCircuit(state);
@@ -179,6 +179,10 @@ export async function allocateBudget(
         retrieve: false,
         gapCount,
         confidenceSpread: 0,
+        // route === "retrieve" here means the question had a chase-able gap and WOULD have looped —
+        // the convergence truncated it. Flag it so the board shows "truncated · gap", not a settled
+        // fault line (whose reason genuinely is "retrieving is futile").
+        truncated: route === "retrieve",
         reason:
           route === "retrieve"
             ? `${stance === "contested" ? "evidential contention" : "named evidence gap"} — would retrieve, but converged (${shortCircuit})`
@@ -193,7 +197,7 @@ export async function allocateBudget(
       newEvidenceCount: state.newEvidenceCount,
       gateScores,
     });
-    return { state: { ...state, converged: true }, continueLoop: false, usage: [], gateScores };
+    return { state: { ...state, converged: true }, continueLoop: false, usage: [], gateScores, convergedReason: shortCircuit };
   }
 
   const unresolved = state.questions.filter(q => !q.resolved);
@@ -292,6 +296,7 @@ export async function allocateBudget(
       continueLoop: false,
       usage: [],
       gateScores: zeroCostResolved,
+      convergedReason: "zero-cost-resolved",
     };
   }
 
@@ -368,7 +373,8 @@ export async function allocateBudget(
     const keepIds = new Set(sorted.slice(0, state.budgetRemaining).map(s => s.questionId));
     gateScores = gateScores.map(s =>
       s.retrieve && !keepIds.has(s.questionId)
-        ? { ...s, retrieve: false, reason: "clamped — budget insufficient" }
+        // Wanted to retrieve but budget couldn't cover it — a truncation, same as a short-circuit.
+        ? { ...s, retrieve: false, truncated: true, reason: "clamped — budget insufficient" }
         : s
     );
   }
@@ -385,7 +391,7 @@ export async function allocateBudget(
       loopIteration: state.loopIteration,
       budgetRemaining: state.budgetRemaining,
     });
-    return { state: { ...state, converged: true }, continueLoop: false, usage: callUsage, gateScores };
+    return { state: { ...state, converged: true }, continueLoop: false, usage: callUsage, gateScores, convergedReason: "gate-decided-no-retrieve" };
   }
 
   const questions = state.questions.map(q => {
@@ -398,5 +404,6 @@ export async function allocateBudget(
     continueLoop: true,
     usage: callUsage,
     gateScores,
+    convergedReason: null, // still looping — no terminal reason yet
   };
 }

@@ -145,6 +145,8 @@ describe("runResearcher — recon floor (loop 0)", () => {
       stopStep,
       readStep(["https://ex.com/3"]),
       stopStep,
+      readStep(["https://ex.com/4"]),
+      stopStep,
     ]);
 
     const { evidence } = await runResearcher(q("q1"), "recon mission", 0, new Set(), new PassPool(100));
@@ -225,12 +227,12 @@ describe("runResearcher — per-pass evidence ceiling (eval parity)", () => {
     expect(evidence.length).toBe(2);
   });
 
-  it("floor==ceiling on loop 0: 3 relevant reads satisfy the floor and stop without over-reading or endless nudging", async () => {
-    scriptModel([readStep(["https://ex.com/a", "https://ex.com/b", "https://ex.com/c"]), stopStep]);
+  it("floor==ceiling on loop 0: 4 relevant reads satisfy the floor and stop without over-reading or endless nudging", async () => {
+    scriptModel([readStep(["https://ex.com/a", "https://ex.com/b", "https://ex.com/c", "https://ex.com/d"]), stopStep]);
 
     const { evidence } = await runResearcher(q("q4"), "recon", 0, new Set(), new PassPool(100));
 
-    expect(evidence.length).toBe(3); // floor (3) met and ceiling (3) never exceeded
+    expect(evidence.length).toBe(RECON_FLOOR); // floor (4) met and ceiling (4) never exceeded
     // Read step + the stop step only — no nudge, since the floor was already satisfied.
     expect((generateText as Mock).mock.calls.length).toBe(2);
   });

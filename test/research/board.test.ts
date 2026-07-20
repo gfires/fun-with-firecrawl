@@ -130,6 +130,26 @@ describe("latestGateScoreFor / gateVerdict", () => {
       gateVerdict({ questionId: "q1", retrieve: false, gapCount: 0, confidenceSpread: 0, reason: "" }, "insufficient"),
     ).toBe("limitation");
   });
+
+  it("verdict is truncated (NOT fault-line) when a contested question wanted retrieval but the run converged", () => {
+    // The exact bug this fixes: a budget-truncated contested question must not read as a settled
+    // fault line. `truncated` is checked before stance, so this returns "truncated", not "fault-line".
+    expect(
+      gateVerdict(
+        { questionId: "q1", retrieve: false, truncated: true, gapCount: 3, confidenceSpread: 0, reason: "would retrieve, but converged (cost-headroom)" },
+        "contested",
+      ),
+    ).toBe("truncated");
+  });
+
+  it("verdict is truncated for an insufficient question clamped for budget too", () => {
+    expect(
+      gateVerdict(
+        { questionId: "q1", retrieve: false, truncated: true, gapCount: 2, confidenceSpread: 0, reason: "clamped — budget insufficient" },
+        "insufficient",
+      ),
+    ).toBe("truncated");
+  });
 });
 
 describe("deliberationLabel", () => {

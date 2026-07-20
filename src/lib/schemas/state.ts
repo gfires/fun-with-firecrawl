@@ -108,6 +108,13 @@ export const ResearchState = Annotation.Root({
   searchCredits: Annotation<number>({ reducer: (prev, next) => prev + next, default: () => 0 }),
   scrapeCredits: Annotation<number>({ reducer: (prev, next) => prev + next, default: () => 0 }),
   converged: Annotation<boolean>({ reducer: (_prev, next) => next, default: () => false }),
+  /**
+   * Why the retrieval loop ended, set by the gate the moment it converges (gateShortCircuit's
+   * reason, or "gate-decided-no-retrieve" / "zero-cost-resolved"). null while the loop is still
+   * running. Surfaced on the `gate:done` event so the live board AND the replay can state the reason
+   * a run stopped — a settled convergence vs a budget/loop truncation — instead of an unexplained halt.
+   */
+  convergedReason: Annotation<string | null>({ reducer: (_prev, next) => next, default: () => null }),
   /** Every LLM call made anywhere in the graph (decompose, committee, gate), append-only. */
   llmCalls: Annotation<AnnotatedUsage[]>({
     reducer: (prev, next) => [...prev, ...next],

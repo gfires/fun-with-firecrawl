@@ -58,6 +58,7 @@ function stateOf(over: Partial<ResearchStateT>): ResearchStateT {
     searchCredits: 0,
     scrapeCredits: 0,
     converged: false,
+    convergedReason: null,
     llmCalls: [],
     searchedQueries: [],
     gateScores: [],
@@ -217,6 +218,10 @@ describe("allocateBudget — short-circuit before any LLM call", () => {
       expect(score?.retrieve).toBe(false); // never actually retrieve on a short-circuit exit
       expect(score?.reason).toMatch(/would retrieve/i);
       expect(score?.reason).toMatch(/cost-headroom/i);
+      // The question wanted a loop it didn't get — flagged truncated so the board shows an unfinished
+      // chase, not a settled fault line. And the run carries WHY it stopped.
+      expect(score?.truncated).toBe(true);
+      expect(result.convergedReason).toBe("cost-headroom");
       assertNoLlmCalls();
     }, 1.0);
   });

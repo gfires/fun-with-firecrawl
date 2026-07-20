@@ -308,8 +308,8 @@ export async function runResearcher(
 
   // Recon floor: loop 0 is reconnaissance (a MINIMUM before the agent may finish); later loops
   // target a named gap, so no floor. Enforced by re-driving the loop, never a deadlock. Clamped to
-  // the ceiling so the floor can never exceed maxReads — on loop 0, RECON_FLOOR (3) == maxReads (3),
-  // so the agent reads EXACTLY 3 (floor == ceiling), matching the coded grounding depth.
+  // the ceiling so the floor can never exceed maxReads — on loop 0, RECON_FLOOR (4) == maxReads (4),
+  // so the agent reads EXACTLY 4 (floor == ceiling), matching the coded grounding depth.
   const reconFloor = loopIteration === 0 ? Math.min(RECON_FLOOR, maxReads) : 0;
 
   const messages: ModelMessage[] = [{ role: "user", content: mission }];

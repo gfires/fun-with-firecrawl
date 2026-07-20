@@ -90,6 +90,7 @@ function makeState(overrides: Partial<ResearchStateT> = {}): ResearchStateT {
     searchCredits: 0,
     scrapeCredits: 0,
     converged: false,
+    convergedReason: null,
     llmCalls: [],
     searchedQueries: [],
     gateScores: [],
@@ -216,6 +217,7 @@ function fixtureState(): ResearchStateT {
     searchCredits: 4,
     scrapeCredits: 6,
     converged: true,
+    convergedReason: null,
     debateTranscripts: fixtureTranscripts(),
   });
 }

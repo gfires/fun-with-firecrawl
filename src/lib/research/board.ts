@@ -71,21 +71,26 @@ export function scopeGateDecisionsToQuestion(
   }));
 }
 
-export type GateVerdict = "pending" | "settled" | "fault-line" | "limitation" | "retrieve";
+export type GateVerdict = "pending" | "settled" | "fault-line" | "limitation" | "retrieve" | "truncated";
 
 /**
- * The Gate cell's route verdict — derived from the REAL gate decision (`retrieve`) plus the
- * committee's stance, mirroring gate.ts's own three-way resolve reasoning (questionRoute/
- * routeReason) rather than collapsing every resolve into "settled":
+ * The Gate cell's route verdict — derived from the REAL gate decision (`retrieve`/`truncated`) plus
+ * the committee's stance, mirroring gate.ts's own resolve reasoning (questionRoute/routeReason)
+ * rather than collapsing every resolve into "settled":
  * - the gate sent it back to retrieval → "retrieve"
- * - resolved + `"contested"` → a reported fault line, not a confident answer
- * - resolved + `"insufficient"` → a LIMITATION (no chase-able gap, or diminishing returns already
- *   gave up on it) — the committee never reached a directional call, so this is not "settled" either
+ * - `truncated` → the question was still RESOLVED (committee stance + report entry) but had a
+ *   chase-able gap the run converged before pursuing (cost-headroom / budget clamp). It reads as
+ *   "answered · gap unchased" — answered on the evidence in hand, with the gap noted — NOT a settled
+ *   fault line and NOT a failure. Checked BEFORE stance so a budget-truncated `contested` question
+ *   shows "truncated", not "fault-line".
+ * - resolved + `"contested"` → a genuinely reported fault line (retrieval was futile), not a call
+ * - resolved + `"insufficient"` → a LIMITATION (no chase-able gap, or diminishing returns gave up)
  * - resolved + a unanimous decisive lean (`supports`/`opposes`) → "settled", the only confident case
  */
 export function gateVerdict(score: GateScore | undefined, stance: CommitteeStance): GateVerdict {
   if (!score) return "pending";
   if (score.retrieve) return "retrieve";
+  if (score.truncated) return "truncated";
   if (stance === "contested") return "fault-line";
   if (stance === "insufficient") return "limitation";
   return "settled";

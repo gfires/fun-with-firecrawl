@@ -80,6 +80,7 @@ function stateOf(over: Partial<ResearchStateT>): ResearchStateT {
     searchCredits: 0,
     scrapeCredits: 0,
     converged: false,
+    convergedReason: null,
     llmCalls: [],
     searchedQueries: [],
     gateScores: [],

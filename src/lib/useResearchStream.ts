@@ -43,6 +43,8 @@ export interface GateDecision {
   resolvedIds: string[];
   unresolvedIds: string[];
   continueLoop: boolean;
+  /** Why the loop ended at this gate (null while still looping). Drives the board's stop-reason banner. */
+  convergedReason?: string | null;
 }
 
 export interface LoopSnapshot {
@@ -120,6 +122,37 @@ export const initialResearchState: ResearchUIState = {
   error: null,
   running: false,
 };
+
+// Backfill the structured `truncated` / `convergedReason` signals from the gate's (code-generated,
+// stable) reason strings when an event predates those fields. New runs carry the fields directly and
+// these are no-op passthroughs; recorded fixtures/traces from before the fields existed still light
+// up the board's stop-reason banner and "truncated · gap" verdicts. This is the ONE normalization
+// point, so live and replay reduce a gate:done to the identical GateDecision shape.
+const TRUNCATED_REASON = /would retrieve, but converged|clamped .*budget insufficient/i;
+const CONVERGED_REASON_CAPTURE = /converged \(([^)]+)\)/i;
+
+/** A gate score with `truncated` filled in: honored if already set, else derived from the reason. */
+export function normalizeGateScore(s: GateScore): GateScore {
+  if (s.truncated !== undefined) return s;
+  return { ...s, truncated: TRUNCATED_REASON.test(s.reason) };
+}
+
+/** Why the loop ended: the event's own field if present, else derived from the converged reason
+ *  embedded in a score's reason string ("...converged (cost-headroom)"), else null while looping. */
+export function deriveConvergedReason(ev: {
+  convergedReason?: string | null;
+  continueLoop: boolean;
+  gateScores: GateScore[];
+}): string | null {
+  if (ev.convergedReason !== undefined && ev.convergedReason !== null) return ev.convergedReason;
+  if (ev.continueLoop) return null;
+  for (const s of ev.gateScores) {
+    const m = s.reason.match(CONVERGED_REASON_CAPTURE);
+    if (m) return m[1];
+  }
+  if (ev.gateScores.some((s) => /clamped .*budget insufficient/i.test(s.reason))) return "budget";
+  return null;
+}
 
 function addUsage(prev: ResearchUsage, u: AnnotatedUsage): ResearchUsage {
   return {
@@ -430,10 +463,11 @@ export function reduce(state: ResearchUIState, ev: ResearchEvent): ResearchUISta
     case "gate:done": {
       const decision: GateDecision = {
         loopIteration: ev.loopIteration,
-        gateScores: ev.gateScores,
+        gateScores: ev.gateScores.map(normalizeGateScore),
         resolvedIds: ev.resolvedQuestionIds,
         unresolvedIds: ev.unresolvedQuestionIds,
         continueLoop: ev.continueLoop,
+        convergedReason: deriveConvergedReason(ev),
       };
       const snapshot: LoopSnapshot = {
         iteration: ev.loopIteration,
@@ -495,8 +529,24 @@ export function reduce(state: ResearchUIState, ev: ResearchEvent): ResearchUISta
     case "research:usage":
       return { ...state, usage: addUsage(state.usage, ev.usage) };
 
-    case "research:mechanics":
-      return { ...state, mechanics: ev.mechanics };
+    case "research:mechanics": {
+      // Reconcile the header/ticker cost to the AUTHORITATIVE total. The running total is summed from
+      // research:usage events (great for a live ticker), but the mechanics receipt carries the cost
+      // tracker's rollup — the single source of truth (survives super-step rollback; folds in the
+      // out-of-graph answer). Snapping to it here makes the FINAL displayed cost correct even for an
+      // old fixture missing some usage events or a degraded run, in live and replay alike. Tokens stay
+      // as summed. `research:mechanics` is terminal, so this never fights the live ticker mid-run.
+      //
+      // Guarded: replaying a persisted run (/replay?id=<uuid>) whose stored mechanics predates the
+      // `convergence` sub-object must NOT crash the whole reduce — fall back to the streamed total
+      // (what the pre-reconciliation code always showed) rather than deref undefined → NaN/throw.
+      const authoritativeCost = ev.mechanics?.convergence?.totalCostUsd ?? state.usage.totalCostUsd;
+      return {
+        ...state,
+        mechanics: ev.mechanics,
+        usage: { ...state.usage, totalCostUsd: authoritativeCost },
+      };
+    }
 
     case "research:error":
       return {

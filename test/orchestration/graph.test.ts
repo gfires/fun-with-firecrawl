@@ -43,6 +43,7 @@ function stateOf(over: Partial<ResearchStateT>): ResearchStateT {
     budgetRemaining: 0,
     budgetSpent: 0,
     converged: false,
+    convergedReason: null,
     searchedQueries: [],
     answer: "",
     debateTranscripts: {},

@@ -18,6 +18,28 @@ export type ClaimStanceT = z.infer<typeof ClaimStance>;
 /** The abstention value — a role that can't yet take a directional position. Excluded from decisive stances. */
 export const ABSTENTION_STANCE: ClaimStanceT = "insufficient";
 
+/**
+ * THE canonical, agent-facing definition of what each stance MEANS — the single source of truth used
+ * by the claim schema's `.describe()` hint AND the committee/debate prompt builders (prompts.ts), so
+ * a role never sees two subtly different definitions. Stance is the most-misread field, so this is
+ * deliberately explicit about the one distinction roles get wrong: stance is the DIRECTIONAL
+ * IMPLICATION for the opportunity, not whether the question was answerable or whether the evidence
+ * "matches" the question. A fully-answered question still takes a directional stance.
+ */
+export const STANCE_DEFINITION = [
+  "`stance` is your directional read on THE OPPORTUNITY (the overall go/no-go), seen through THIS",
+  "question's evidence — NOT whether the question was answerable. Pick exactly one:",
+  "• 'supports' = this question's evidence makes the opportunity look MORE real / attractive / winnable.",
+  "• 'opposes'  = it makes the opportunity look LESS attractive — a risk, blocker, or negative signal.",
+  "• 'insufficient' = the evidence is absent, off-topic, or too thin to point EITHER way (a genuine",
+  "  abstention). This is NOT a hedge and NOT 'the answer is nuanced' — a nuanced-but-real signal still",
+  "  gets a direction. Reserve 'insufficient' for when you truly cannot lean.",
+  "A question can be fully answered and still be 'supports' or 'opposes': e.g. \"who are the competitors?\"",
+  "answered as \"saturated by strong incumbents\" → 'opposes' (bad for a new entrant); \"fragmented, no",
+  "leader\" → 'supports'. Judge the IMPLICATION for the opportunity, not the completeness of the answer.",
+  "Do not default to 'insufficient' to play safe — take the direction the evidence warrants.",
+].join("\n");
+
 const STANCE_SET = new Set<string>(CLAIM_STANCES);
 
 /**
@@ -74,11 +96,7 @@ export type AgentRoleT = z.infer<typeof AgentRole>;
 export const ClaimOutputSchema = z.object({
   conclusion: z.string().describe("2-3 sentence conclusion — be direct, no preamble"),
   confidence: z.number().describe("calibrated confidence between 0 and 1"),
-  stance: ClaimStance.describe(
-    "your lean on the OPPORTUNITY based on THIS question's evidence: 'supports' = evidence points " +
-      "toward the opportunity being real/attractive, 'opposes' = points against it, 'insufficient' = " +
-      "evidence can't support a directional call yet",
-  ),
+  stance: ClaimStance.describe(STANCE_DEFINITION),
   supportingEvidenceIds: z.array(z.string()),
   contradictingEvidenceIds: z.array(z.string()),
   missingEvidence: z.array(z.string()).describe("up to 3 specific evidence gaps, each under 100 chars"),

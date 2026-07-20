@@ -76,8 +76,10 @@ export const RESULTS_PER_QUESTION  = 6;
 // reconnaissance: just enough to seed grounded round-0 claims and let the committee name its gaps.
 // GROUNDING FLOOR — do NOT drop below 3: thin evidence historically caused a "historian confabulation"
 // bug (roles claiming about evidence that isn't there and mis-calibrating their missingEvidence), so
-// recon must stay deep enough that round-0 claims and their named gaps are trustworthy.
-export const RECON_RESULTS_PER_QUESTION = 3;
+// recon must stay deep enough that round-0 claims and their named gaps are trustworthy. Set to 4 (up
+// from the floor of 3) so the blind openings sit on a slightly broader base — one more source per
+// question meaningfully lowers the odds a whole question opens on a single off-topic scrape.
+export const RECON_RESULTS_PER_QUESTION = 4;
 export const SEARCH_CANDIDATES_PER_QUESTION = 10;
 
 /**

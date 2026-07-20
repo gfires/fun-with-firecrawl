@@ -59,12 +59,21 @@ Confirmed scope (from design review):
 | **Recon** | source count gathered on loop 0 | evidence list for this question |
 | **Openings** | four role dots colored by round-0 **stance** (green supports / red opposes / grey insufficient); the "→" resolves to `agree` or `split` | the blind opening claims fanned out: role, conclusion, confidence bar, stance chip |
 | **Deliberation** | `⚡ skipped` (+reason) or `🗣 debated N rounds` (+ productive?) | the debate: openings → conversational rounds → final, with concede/rebut arrows (DebateArena/Swimlane) |
-| **Gate** | committee stance chip + route verdict (`settled` / `resolve fault line` / `retrieve +gap`) | the gate reason + GateScore (VOI, gap count) |
+| **Gate** | committee stance chip + route verdict (`✔ settled` / `⚡ fault line` / `⚠ limitation` / `↻ retrieve +gap` / `⌛ answered · gap unchased`) | the gate reason + GateScore (VOI, gap count) |
 | **Loop** | `↻ retrieve loop K` with a **window-shopping mini-viz**, or `—` if settled | the researcher trace: mission → search (hits, capped?) → read (stored/ceiling) |
 
 The **window-shopping mini-viz** is the payoff of the SSE work already landed. Per retrieval pass,
 render a tiny strip: `🔍 "query" (10 hits) → 🚫 capped → 📄 read 3/5 ⛔ceiling`. The `capped` and
 `hitCeiling` flags are the story — the agent told to stop shopping and commit to reading.
+
+**Stop-reason banner + `truncated` verdict.** A converged run shows a one-line banner stating *why* it
+stopped (`gate:done.convergedReason` — e.g. cost-headroom / max-loops / gate-decided), so a run that
+halted on budget never reads as "every question settled". A question that had a chase-able gap but the
+run converged before pursuing it is flagged `GateScore.truncated` and rendered **`⌛ answered · gap
+unchased`** (amber) — it WAS resolved (committee stance + report entry), just on the evidence in hand;
+this is distinct from a genuine `⚡ fault line` (retrieval was futile) and is never a red failure.
+Both signals are backfilled from the gate's reason strings for traces recorded before the fields
+existed, so live and replay stay coherent.
 
 ## 2. The hero moment
 

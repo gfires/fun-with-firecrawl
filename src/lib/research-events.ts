@@ -13,6 +13,14 @@ export interface GateScore {
   gapCount: number;
   confidenceSpread: number;
   reason: string;
+  /**
+   * The question WANTED another retrieval loop (a chase-able evidential gap) but the run converged
+   * before it could — a budget/cost/loop truncation, not an epistemic result. Set when the loop was
+   * short-circuited (e.g. cost-headroom) or the retrieve was clamped for insufficient budget. Lets
+   * the board render a distinct "truncated · gap" verdict instead of collapsing these into a genuine
+   * "fault line". Absent/false means the resolve was a real conclusion (settled / fault line / limitation).
+   */
+  truncated?: boolean;
 }
 
 export type ResearchEvent =
@@ -48,6 +56,12 @@ export type ResearchEvent =
       unresolvedQuestionIds: string[];
       continueLoop: boolean;
       gateScores: GateScore[];
+      /**
+       * Why the loop ended when it did (gateShortCircuit's reason — "cost-headroom" / "no-progress" /
+       * "max-loops" / "budget" — or "gate-decided-no-retrieve" / "zero-cost-resolved"). null while the
+       * loop continues. Persisted, so the replay states the reason a run stopped, not just that it did.
+       */
+      convergedReason?: string | null;
     }
   | { type: "recommend:begin" }
   | { type: "recommend:done"; report: ResearchReport }
