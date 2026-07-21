@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import Link from "next/link";
 import type { ResearchEvent } from "@/lib/research-events";
 import type { RunSummary } from "@/lib/runs";
 import type { ResearchReport } from "@/lib/orchestration/graph";
@@ -91,6 +92,9 @@ export default function ReplayPage() {
   // swimlane region needs to actually scroll (topBar grows -> swimlane's flex-1 remainder shrinks).
   const picker = (
     <div className="flex shrink-0 items-center gap-2 font-mono text-xs">
+      <Link href="/" className="shrink-0 text-mute transition hover:text-accent">
+        ← home
+      </Link>
       <span className="eyebrow shrink-0">past runs</span>
       <div className="flex flex-1 gap-2 overflow-x-auto pb-1">
         <button

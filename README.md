@@ -35,9 +35,9 @@ A panel that's told to agree will agree — and that agreement is worthless, bec
 
 ## Does it actually work?
 
-Modern LLMs can use search the web, so one real test is whether the process actually catches its own unexamined inferential leaps. We ran the same question through Blindspot's orchestrated arm and through a single continuous Claude Sonnet 5 session at high reasoning effort, web search on, explicitly told to cite in-text and return a decisive verdict — the same model family and tier as Blindspot's own strongest committee seat, not a strawman:
+Modern LLMs can search the web, so one real test is whether the process actually catches its own unexamined inferential leaps. We ran the same question through Blindspot's orchestrated arm and through a single continuous Claude Sonnet 5 session at high reasoning effort, web search on, explicitly told to cite in-text and return a decisive verdict — the same model family and tier as Blindspot's own strongest committee seat, not a strawman:
 
-*the AI agent ecosystem is fragmented across orchestration frameworks, memory systems, eval platforms, tool-use infra, and observability. Is there venture-scale opportunity in agent infra, or will these capabilities become commoditized by frontier model providers?*
+*the AI agent ecosystem is currently fragmented across orchestration frameworks, memory systems, eval platforms, tool-use infra, and observability. Is there venture-scale opportunity in agent infra, or will these capabilities become commoditized by frontier model providers?*
 
 Both arms landed on the same shape: durable, stateful layers (memory, execution, eval / observability, governance) look investable; generic orchestration and connector layers are commoditizing under frontier-lab and hyperscaler pressure. Both independently reached for the same four companies as central evidence — Temporal, Braintrust, Arize, Mem0. The difference wasn't the verdict, but what each process did with its own load-bearing assumption. The single agent presented the raises as decisive:
 
@@ -47,11 +47,11 @@ Blindspot's committee reasoned from the identical four raises, but its adversari
 
 *the skeptic and investor demand proof of >$100M ARR, gross retention, and NRR that simply is not in the public record; the historian and operator treat the Temporal / Braintrust / Arize / Mem0 raises as sufficient directional signal. Neither side has evidence the other lacks — this is a threshold-of-proof disagreement.*
 
-The single agent did with a real hedge, flagging demand-side production adoption as the biggest variable in the thesis. But that was the wrong doubt: a generic risk surfaced, while the sharp, load-bearing leap in its own argument (and the one an investment committee would actually attack) passed without a flag. Confidence checked only by the process that produced it doesn't reliably know where to look.
+The single agent did close with a real hedge, flagging demand-side production adoption as the biggest variable in the thesis. But that was the wrong doubt: a generic risk surfaced, while the sharp, load-bearing leap in its own argument (and the one an investment committee would actually attack) passed without a flag. Confidence checked only by the process that produced it doesn't reliably know where to look.
 
 Attention over evidence isn't free, and knowing what deserves scrutiny is a different skill than knowing what to search for. A single agent, however good its tools, gets one pass of attention, spent by one process, checked by nothing but itself. Blindspot spends it twice: once to find the evidence, once, adversarially, to ask what it actually proves. And because every step of that second pass is threaded to a source and replayable byte-for-byte at /replay, you can verify the fault line was real and trace it back to the original sources. This is the point of making the reasoning auditable rather than taking a confident paragraph on faith.
 
-Reproduce: npm run compare -- "<topic>" writes every arm's verdict, cost, and timing to compare-output/<topic>-<timestamp>.json.
+Reproduce the in-repo side: `npm run compare -- "<topic>"` writes each arm's verdict, cost, and timing to `compare-output/<topic>-<timestamp>.json`. The single-agent side above was a separate manual session — the same prompt in any tool-using chat interface — not something this repo runs for you.
 
 ## How it works
 
@@ -66,9 +66,9 @@ Four role-agents, each with their own incentives:
 | **Investor** | Return — is there a fundable business, not just a real pain point? | Claude Sonnet 5 → Haiku 4.5 |
 | **Skeptic** | Disconfirmation — actively hunts for the strongest reason this fails | Gemini 3.1 Flash-Lite |
 
-**Blind openings.** Round 0 shows every role the *same* evidence but not each other's answers.
-Working off the overarching research question, each states a claim: a conclusion, a calibrated confidence, 
-and a categorical **stance** (`supports` / `opposes` / `insufficient`).
+**Blind openings.** For each decomposed question, round 0 shows every role the *same* evidence but
+not each other's answers. Each states a claim: a conclusion, a calibrated confidence, and a
+categorical **stance** (`supports` / `opposes` / `insufficient`).
 
 **Debate only when it's genuine.** Conversational rounds run only when the openings show real disagreement — at least two conflicting stances, or two roles citing the same source to opposite conclusions. A unanimous opening skips straight to the gate at zero extra cost, as further discussing agreement eats tokens that have far better marginal utility elsewhere. When rounds do run, each role sees the full transcript and the challenges aimed at it, and may rebut, concede, or extend — conceding only when a cited source forces it, never to consensus. Every role is explicitly instructed that agreement is not evidence. The debate stops the instant a round moves no position (confidence shift below DEBATE_CONFIDENCE_EPSILON = 0.05 and no new cited-id changes count as no movement) or hits the MAX_DEBATE_ROUNDS = 2 cap.
 
@@ -105,9 +105,9 @@ an open-ended agent loop:
 topic
    │
    ▼ DECOMPOSE     manager breaks the topic into 3–4 concrete research questions + a search query each
-   ▼ RETRIEVE       search + scrape for each open question (agentic researcher swarm)
+   ▼ RETRIEVE       search + scrape for each open question (coded pipeline, or an agentic researcher swarm)
    ▼ DIGEST         compress each fresh source into a short evidence item before the committee reads it
-   ▼ DEBATE         blind opening → conversational rounds only on disagreement OR insufficient evidence
+   ▼ DEBATE         blind opening → conversational rounds only on genuine disagreement
    ▼ GATE           route each question: settle / report fault line / retrieve the named gap
    ├─(gap named, budget left)─► back to RETRIEVE
    ▼ ANSWER         cited, per-question report — exempt from the cost cap so it always completes
@@ -116,7 +116,7 @@ topic
 State moves through the graph via reducers. Budget is
 tracked as `budgetRemaining`/`budgetSpent`, and every node that touches it returns a *signed
 delta* that an additive reducer accumulates (preventing clobbering). Debate transcripts use a replace-per-question reducer instead, and every graph
-run also checkpoints its full state history (LangGraph `MemorySaver`) so runs are fully inspectable
+run also checkpoints its full state history (LangGraph `MemorySaver`) so runs are fully inspectable.
 
 The graph loops back to `RETRIEVE` only when the gate found a named gap *and* budget remains —
 capped independently by a hard iteration ceiling, a zero-new-evidence kill switch (a pass that
@@ -127,10 +127,10 @@ identical argument), and the cost cap below.
 
 Every run is capped on two independent axes, checked before every spend:
 
-- **Retrieval credits** (`TOTAL_RETRIEVAL_BUDGET = ...`) — one combined search+scrape credit pool.
+- **Retrieval credits** (`TOTAL_RETRIEVAL_BUDGET = 80`) — one combined search+scrape credit pool.
   No single retrieval pass may spend more than half of it (`MAX_LOOP_SPEND_FRACTION = 0.5`), so
   an early broad pass can't drain the pool before the gap-targeted passes ever get to run.
-- **LLM spend** (`MAX_RUN_COST_USD = ...`) — a real-time USD ceiling checked before every gated
+- **LLM spend** (`MAX_RUN_COST_USD = 0.75`) — a real-time USD ceiling checked before every gated
   call via an `AsyncLocalStorage`-scoped cost tracker. Before starting a fresh retrieve+debate cycle, the gate also checks it can
   *finish* the cycle it's about to start (`LOOP_COST_PER_QUESTION_USD × unresolved-question-count`
   of headroom required), as a mid-debate cap hit renders the whole round effectively useless. If the cap is still hit, the run
@@ -189,18 +189,29 @@ a model id in one place and correctness, cost accounting, and the UI all follow 
 
 ### Caching and convergence
 
-- **Result caching.** Search results, scraped pages, and a scraper blocklist, cached in Supabase and shared across processes and both arms: a repeat query or URL is free on a later run, and an unreachable Supabase degrades to uncached rather than failing. Setup: Caching.
+- **Result caching.** Search results, scraped pages, and a scraper blocklist, cached in Supabase and shared across processes and both arms: a repeat query or URL is free on a later run, and an unreachable Supabase degrades to uncached rather than failing (setup: see [Caching](#caching) below).
 - **Prompt caching.** The three Claude roles share a byte-identical system-prefix (question + evidence + calibration) per round, above PROMPT_CACHE_MIN_CHARS = 4500, so Anthropic serves repeat reads from its prompt cache instead of re-billing.
 - **Convergence thresholds, not open-ended looping.** a debate round counts as "moved" only if a role's confidence shifts past DEBATE_CONFIDENCE_EPSILON = 0.05 or its cited set changes; a retrieval loop is "diminishing" once it raises mean confidence by < LOOP_CONFIDENCE_EPSILON = 0.05 and closes no named gap. The system stops arguing/searching the moment it stops learning, rather than running to a hard cap by default.
 
 ### The runnable arms
 
-npm run compare runs all three on one topic, writing cost/quality/timing side by side. They serve different purposes — only the coded-vs-agentic pair is a controlled comparison:
+`npm run compare` runs all three arms on one topic, writing cost/quality/timing side by side —
+but they serve different purposes, and only the `coded`-vs-`agentic` pair is a controlled comparison:
 
-Baseline — a fast, cheap, fully-traceable single pass: search → triage → scrape → one LLM analysis call, no debate. This is the quick-scan mode, not a control for the orchestrated arm's value-add — that comparison is against a full-power single agent (see Does it actually work? above), not baseline.
-Orchestrated (LangGraph) — the full system described above. Two retrieval strategies plug into the same graph:
-coded — deterministic search → triage → scrape, tuned per question.
-agentic — a bounded researcher agent (Haiku) per open question, searching and reading for itself instead of following a fixed pipeline. Evidence volume per question is pinned equal to coded by construction, so coded vs agentic is an apples-to-apples eval of retrieval judgment, not quantity.
+- **Baseline** — a fast, cheap, fully-traceable single pass: search → triage → scrape → one LLM
+  analysis call, no debate. This is the quick-scan mode, not a control for the orchestrated arm's
+  value-add — that comparison is against a full-power single agent (see "Does it actually work?"
+  above), not baseline.
+- **Orchestrated** (LangGraph) — the full system described above. Two retrieval strategies plug into
+  the same graph, and only *this* pair is apples-to-apples:
+  - `coded` — deterministic search → triage → scrape, tuned per question. The permanent eval
+    **control arm** (`run-arm orchestrated`, and every `compare` run).
+  - `agentic` — a bounded researcher agent (Haiku) per open question, searching and reading for
+    itself instead of following a fixed pipeline. Evidence volume per question is pinned equal to
+    `coded` by construction, so `coded` vs. `agentic` isolates retrieval *judgment*, not quantity.
+
+The live browser UI runs the `agentic` arm; `coded` is reached through the scripts above (and an
+explicit `mode` override on the API route). `baseline` has its own quick-scan UI.
 
 ---
 
@@ -290,7 +301,7 @@ npm run compare -- "freight brokerage"
 
 ## Caching
 
-Setup only — behavior is described under Caching and convergence. Create the blindspot schema from supabase/schema.sql, add it to the project's Exposed schemas, then verify with npm run smoke:supabase. Optional: without it, runs proceed uncached.
+Setup only — behavior is described under [Caching and convergence](#caching-and-convergence) above. Create the `blindspot` schema from [`supabase/schema.sql`](supabase/schema.sql), add it to the project's Exposed schemas, then verify with `npm run smoke:supabase`. Optional: without it, runs proceed uncached.
 
 ---
 
