@@ -18,46 +18,46 @@ an honest account of what remains unsettled.
 
 A transformer's whole computation is "which tokens deserve attention, given what I've already
 seen." That's great for quick comprehension, not so much for getting the full, messy picture. 
-A single-shot answer has no mechanism to go check a fact, buries uncertainty instead of surfacing it,
-and every output token is optimized for plausibility. Put simply, you can't audit a paragraph of confident
-prose against the sources it didn't cite.
+A single-shot answer surfaces what's already latent in model weights, buries uncertainty instead of surfacing it,
+and optimizes output tokens for plausibility. You can't audit a paragraph of confident
+prose against sources it didn't cite, and a question of venture-scale viability certainly isn't latent in any weights.
+Instead, it depends on precedent (has this been tried, how did it die), operational reality (what actually breaks day to day), market structure (is there a fundable venture, not just a real pain point), and the single strongest reason it fails. Each of those lives in a different corner of the web, phrased differently, buried among many competing signals.
 
-Blindspot inverts the question. Instead of asking a model to *recall* an answer, it asks: **out
+Thus, instead of asking a model to *recall* an answer, Blindspot asks: **out
 of everything findable on the open web, what specific evidence is worth our time, and what does
-it actually establish?** The problem isn't source breadth (that's virtually infinite); it's retrieval,
-allocation, and adaptability. Fortunately, we can build real guarantees: budgets, citations, adversarial
-checks, and a record of both what was read and why.
-
-### Assessing a market is a search problem, not a lookup
-
-"Is there business opportunity in freight-brokerage vendor management?" isn't answered by any one 
-number or article. It depends on precedent (has this been tried, how did it die), operational reality 
-(what actually breaks day to day), market structure (is there a fundable venture here), and the strongest
-reason it fails. Each of those lives in different corners of the web, phrased differently, and
-among many competing signals. A broad market scan therefore requires casting a wide net across many angles, expecting most of it to miss, and
-understanding what should be studied, remembered, and argued over before
-synthesizing an answer. Blindspot is built around that reality rather than pretending one
-or two queries will do — retrieval, triage, and budget allocation are first-class system
-components, not an afterthought bolted onto an LLM call.
+it actually establish?** This approach properly treats market or thesis assessment as a retrieval-and-allocation problem, not a lookup. Source breadth is virtually infinite; the scarce resources are attention and budget. So retrieval, triage, and allocation are first-class system components with guarantees (budgets, citations, adversarial checks, and a record of both what was read and why), not an afterthought for a single LLM call.
 
 ### Disagreement is signal, not noise
 
-A panel that's told to agree will agree — and that agreement is worthless, because you can't
-tell if it's real consensus or four models converging on the same plausible-sounding guess.
-Blindspot's committee forms opinions **blind**, independently, before anyone sees anyone else's
-view. This way, cross-role agreement is a genuine signal and disagreement is investigated
-rather than smoothed away. From here, roles actively debate with each other and fetch new evidence as necessary to resolve remaining disagreements (and when the committee can't agree because two readings of the evidence
-are both defensible, the report says so too). Blindspot was designed with the philosophy that surfacing such disagreement is far more useful to a reader than forcing consensus at the expense of real-world nuance.
+A panel that's told to agree will agree — and that agreement is worthless, because you can't tell if it's real consensus or four models converging on the same plausible-sounding guess. Blindspot's committee forms opinions *blind*, independently, before anyone sees anyone else's view. This way, cross-role agreement is a genuine signal and disagreement is investigated rather than smoothed away. From here, roles actively debate with each other and fetch new evidence as necessary to resolve remaining disagreements (and when the committee can't agree because two readings of the evidence are both defensible, the report says so too). Blindspot was designed with the philosophy that surfacing such disagreement is far more useful to a reader than forcing consensus at the expense of real-world nuance.
 
 ---
+
+## Does it actually work?
+
+Modern LLMs can use search the web, so one real test is whether the process actually catches its own unexamined inferential leaps. We ran the same question through Blindspot's orchestrated arm and through a single continuous Claude Sonnet 5 session at high reasoning effort, web search on, explicitly told to cite in-text and return a decisive verdict — the same model family and tier as Blindspot's own strongest committee seat, not a strawman:
+
+*the AI agent ecosystem is fragmented across orchestration frameworks, memory systems, eval platforms, tool-use infra, and observability. Is there venture-scale opportunity in agent infra, or will these capabilities become commoditized by frontier model providers?*
+
+Both arms landed on the same shape: durable, stateful layers (memory, execution, eval / observability, governance) look investable; generic orchestration and connector layers are commoditizing under frontier-lab and hyperscaler pressure. Both independently reached for the same four companies as central evidence — Temporal, Braintrust, Arize, Mem0. The difference wasn't the verdict, but what each process did with its own load-bearing assumption. The single agent presented the raises as decisive:
+
+*That's a real moat mechanism (switching cost via accumulated state), not a narrative one, and it explains why capital is concentrating exactly where you'd predict.*
+
+Blindspot's committee reasoned from the identical four raises, but its adversarial structure surfaced the leap the single agent never examined: raised money and has a durable moat are not the same claim. The gate refused to settle the question and logged it as a fault line instead:
+
+*the skeptic and investor demand proof of >$100M ARR, gross retention, and NRR that simply is not in the public record; the historian and operator treat the Temporal / Braintrust / Arize / Mem0 raises as sufficient directional signal. Neither side has evidence the other lacks — this is a threshold-of-proof disagreement.*
+
+The single agent did with a real hedge, flagging demand-side production adoption as the biggest variable in the thesis. But that was the wrong doubt: a generic risk surfaced, while the sharp, load-bearing leap in its own argument (and the one an investment committee would actually attack) passed without a flag. Confidence checked only by the process that produced it doesn't reliably know where to look.
+
+Attention over evidence isn't free, and knowing what deserves scrutiny is a different skill than knowing what to search for. A single agent, however good its tools, gets one pass of attention, spent by one process, checked by nothing but itself. Blindspot spends it twice: once to find the evidence, once, adversarially, to ask what it actually proves. And because every step of that second pass is threaded to a source and replayable byte-for-byte at /replay, you can verify the fault line was real and trace it back to the original sources. This is the point of making the reasoning auditable rather than taking a confident paragraph on faith.
+
+Reproduce: npm run compare -- "<topic>" writes every arm's verdict, cost, and timing to compare-output/<topic>-<timestamp>.json.
 
 ## How it works
 
 ### The committee — adversarial debate, not a poll
 
-Four role-agents, deliberately built to disagree rather than converge to a bland consensus. Each
-has its own incentive, and one of them runs on a model family that never talks to the others, so
-its skepticism isn't contaminated by peer pressure:
+Four role-agents, each with their own incentives:
 
 | Role | Incentive | Model (opening → re-debate) |
 | --- | --- | --- |
@@ -70,14 +70,7 @@ its skepticism isn't contaminated by peer pressure:
 Working off the overarching research question, each states a claim: a conclusion, a calibrated confidence, 
 and a categorical **stance** (`supports` / `opposes` / `insufficient`).
 
-**Debate only when it's genuine.** Conversational rounds run *only* when the openings show real
-disagreement — at least two conflicting stances, or two roles citing the same source to opposite
-conclusions. A unanimous opening skips straight to the gate at zero extra cost, as further discussing agreement eats tokens that have far better marginal utility elsewhere. When rounds
-do run, each role sees the full transcript and the challenges aimed at it, and may rebut,
-concede, or extend — **conceding only when a cited source forces it, never to consensus**. Every
-role is explicitly instructed that agreement is not evidence. The debate stops the instant a
-round moves no position (confidence shift below `DEBATE_CONFIDENCE_EPSILON = 0.05` and no new
-cited-id changes count as no movement) or hits the `MAX_DEBATE_ROUNDS = 2` cap. These parameters are empirically tuned to balance empirical rigor with maximizing per-token utility.
+**Debate only when it's genuine.** Conversational rounds run only when the openings show real disagreement — at least two conflicting stances, or two roles citing the same source to opposite conclusions. A unanimous opening skips straight to the gate at zero extra cost, as further discussing agreement eats tokens that have far better marginal utility elsewhere. When rounds do run, each role sees the full transcript and the challenges aimed at it, and may rebut, concede, or extend — conceding only when a cited source forces it, never to consensus. Every role is explicitly instructed that agreement is not evidence. The debate stops the instant a round moves no position (confidence shift below DEBATE_CONFIDENCE_EPSILON = 0.05 and no new cited-id changes count as no movement) or hits the MAX_DEBATE_ROUNDS = 2 cap.
 
 ### Preserve disagreement; retrieve only where it pays
 
@@ -130,7 +123,7 @@ capped independently by a hard iteration ceiling, a zero-new-evidence kill switc
 retrieves nothing new can't possibly change the debate, so the loop ends instead of re-running an
 identical argument), and the cost cap below.
 
-### Budget is a hard constraint, enforced in code
+### Budget is a hard constraint
 
 Every run is capped on two independent axes, checked before every spend:
 
@@ -145,7 +138,7 @@ Every run is capped on two independent axes, checked before every spend:
   settled. The final answer call itself is **exempt** from the cap — the deliverable always
   completes, even on a run that otherwise blew its budget.
 
-### Knowing what deserves your attention
+### Knowing what deserves attention
 
 Retrieval finds far more candidate pages than are worth reading, and every source that does get
 read costs both a scrape credit and committee context. Two layers decide what actually earns
@@ -196,35 +189,18 @@ a model id in one place and correctness, cost accounting, and the UI all follow 
 
 ### Caching and convergence
 
-- **Result caching.** Search results, scraped pages, and a scraper blocklist are cached in
-  Supabase, shared across processes and both research arms — a repeated query or URL costs
-  nothing on a later run. If Supabase is unreachable, a run degrades gracefully to uncached
-  rather than failing.
-- **Prompt caching.** The three Claude committee roles share a byte-identical system-message
-  prefix (question + evidence + calibration text) per round, above a minimum size
-  (`PROMPT_CACHE_MIN_CHARS = 4500`), so Anthropic serves repeat reads of it from its prompt cache
-  instead of re-billing full price.
-- **Convergence thresholds, not open-ended looping.** A debate round counts as "moved" only if a
-  role's confidence shifts past `DEBATE_CONFIDENCE_EPSILON = 0.05` or its cited-evidence set
-  changes; a retrieval loop counts as diminishing once it raises mean confidence by less than
-  `LOOP_CONFIDENCE_EPSILON = 0.05` **and** closes no named gap. Both are small, explicit epsilons
-  chosen so the system stops arguing/searching the moment it stops learning, rather than running
-  to a hard cap by default.
+- **Result caching.** Search results, scraped pages, and a scraper blocklist, cached in Supabase and shared across processes and both arms: a repeat query or URL is free on a later run, and an unreachable Supabase degrades to uncached rather than failing. Setup: Caching.
+- **Prompt caching.** The three Claude roles share a byte-identical system-prefix (question + evidence + calibration) per round, above PROMPT_CACHE_MIN_CHARS = 4500, so Anthropic serves repeat reads from its prompt cache instead of re-billing.
+- **Convergence thresholds, not open-ended looping.** a debate round counts as "moved" only if a role's confidence shifts past DEBATE_CONFIDENCE_EPSILON = 0.05 or its cited set changes; a retrieval loop is "diminishing" once it raises mean confidence by < LOOP_CONFIDENCE_EPSILON = 0.05 and closes no named gap. The system stops arguing/searching the moment it stops learning, rather than running to a hard cap by default.
 
-### Two arms, one graph
+### The runnable arms
 
-Two research pipelines run side by side for direct comparison, with `npm run compare` running
-all of them on the same topic and writing cost/quality/timing side by side:
+npm run compare runs all three on one topic, writing cost/quality/timing side by side. They serve different purposes — only the coded-vs-agentic pair is a controlled comparison:
 
-- **Baseline** — the original single-prompt pipeline: search → triage → scrape → one big LLM
-  analysis call. No debate, for comparison against the orchestrated system's actual value-add.
-- **Orchestrated** (LangGraph) — the full system described above. Two interchangeable retrieval
-  strategies plug into the same graph:
-  - `coded` — deterministic search → triage → scrape, tuned per question.
-  - `agentic` — a bounded researcher agent (Haiku) per open question, searching and reading for
-    itself instead of following a fixed pipeline. Evidence *volume* per question is pinned equal
-    to the coded arm by construction, so the two arms are an apples-to-apples eval of retrieval
-    *judgment*, not evidence quantity.
+Baseline — a fast, cheap, fully-traceable single pass: search → triage → scrape → one LLM analysis call, no debate. This is the quick-scan mode, not a control for the orchestrated arm's value-add — that comparison is against a full-power single agent (see Does it actually work? above), not baseline.
+Orchestrated (LangGraph) — the full system described above. Two retrieval strategies plug into the same graph:
+coded — deterministic search → triage → scrape, tuned per question.
+agentic — a bounded researcher agent (Haiku) per open question, searching and reading for itself instead of following a fixed pipeline. Evidence volume per question is pinned equal to coded by construction, so coded vs agentic is an apples-to-apples eval of retrieval judgment, not quantity.
 
 ---
 
@@ -314,12 +290,7 @@ npm run compare -- "freight brokerage"
 
 ## Caching
 
-Search results, scraped pages, and a scraper blocklist are cached in Supabase (`blindspot`
-schema, shared across processes and both arms) so repeat topics cost nothing on the parts already
-fetched. If Supabase is unreachable, a run degrades gracefully — it warns once and proceeds
-uncached rather than failing. Set up: create the schema from
-[`supabase/schema.sql`](supabase/schema.sql), add `blindspot` to the project's Exposed schemas,
-then run `npm run smoke:supabase`.
+Setup only — behavior is described under Caching and convergence. Create the blindspot schema from supabase/schema.sql, add it to the project's Exposed schemas, then verify with npm run smoke:supabase. Optional: without it, runs proceed uncached.
 
 ---
 
